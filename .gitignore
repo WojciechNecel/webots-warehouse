@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.bak
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.codex/
+.vscode/
+.idea/
+webots_warehouse/logs/
+webots_warehouse/reports/
+webots_warehouse/tools/_patch_*.py
+*.wbproj
+.DS_Store
+Thumbs.db

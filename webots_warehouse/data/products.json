@@ -1,0 +1,464 @@
+{
+  "products": [
+    {
+      "id": "P001",
+      "qr_payload": "P001;3.5",
+      "weight": 3.5,
+      "shelf_cell": [
+        2,
+        2
+      ],
+      "level": 0,
+      "slot": -0.25,
+      "position": [
+        -5.75,
+        0.2,
+        -3.5
+      ],
+      "access_cell": [
+        2,
+        1
+      ],
+      "texture": "textures/qr/P001.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P002",
+      "qr_payload": "P002;7.0",
+      "weight": 7.0,
+      "shelf_cell": [
+        4,
+        2
+      ],
+      "level": 1,
+      "slot": 0.25,
+      "position": [
+        -3.25,
+        0.8,
+        -3.5
+      ],
+      "access_cell": [
+        4,
+        1
+      ],
+      "texture": "textures/qr/P002.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P003",
+      "qr_payload": "P003;12.0",
+      "weight": 12.0,
+      "shelf_cell": [
+        6,
+        2
+      ],
+      "level": 2,
+      "slot": -0.25,
+      "position": [
+        -1.75,
+        1.4,
+        -3.5
+      ],
+      "access_cell": [
+        6,
+        1
+      ],
+      "texture": "textures/qr/P003.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P004",
+      "qr_payload": "P004;5.0",
+      "weight": 5.0,
+      "shelf_cell": [
+        9,
+        2
+      ],
+      "level": 1,
+      "slot": 0.25,
+      "position": [
+        1.75,
+        0.8,
+        -3.5
+      ],
+      "access_cell": [
+        9,
+        1
+      ],
+      "texture": "textures/qr/P004.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P005",
+      "qr_payload": "P005;18.0",
+      "weight": 18.0,
+      "shelf_cell": [
+        11,
+        2
+      ],
+      "level": 0,
+      "slot": -0.25,
+      "position": [
+        3.25,
+        0.2,
+        -3.5
+      ],
+      "access_cell": [
+        11,
+        1
+      ],
+      "texture": "textures/qr/P005.png",
+      "present": false,
+      "world_qr": null
+    },
+    {
+      "id": "P006",
+      "qr_payload": "P006;9.5",
+      "weight": 9.5,
+      "shelf_cell": [
+        13,
+        2
+      ],
+      "level": 2,
+      "slot": 0.25,
+      "position": [
+        5.75,
+        1.4,
+        -3.5
+      ],
+      "access_cell": [
+        13,
+        1
+      ],
+      "texture": "textures/qr/P006.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P007",
+      "qr_payload": "P007;4.0",
+      "weight": 4.0,
+      "shelf_cell": [
+        2,
+        3
+      ],
+      "level": 1,
+      "slot": -0.25,
+      "position": [
+        -5.75,
+        0.8,
+        -2.5
+      ],
+      "access_cell": [
+        2,
+        4
+      ],
+      "texture": "textures/qr/P007.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P008",
+      "qr_payload": "P008;15.0",
+      "weight": 15.0,
+      "shelf_cell": [
+        5,
+        3
+      ],
+      "level": 0,
+      "slot": 0.25,
+      "position": [
+        -2.25,
+        0.2,
+        -2.5
+      ],
+      "access_cell": [
+        5,
+        4
+      ],
+      "texture": "textures/qr/P008.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P009",
+      "qr_payload": "P009;6.5",
+      "weight": 6.5,
+      "shelf_cell": [
+        10,
+        3
+      ],
+      "level": 2,
+      "slot": -0.25,
+      "position": [
+        2.25,
+        1.4,
+        -2.5
+      ],
+      "access_cell": [
+        10,
+        4
+      ],
+      "texture": "textures/qr/P009.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P010",
+      "qr_payload": "P010;11.0",
+      "weight": 11.0,
+      "shelf_cell": [
+        13,
+        3
+      ],
+      "level": 1,
+      "slot": 0.25,
+      "position": [
+        5.75,
+        0.8,
+        -2.5
+      ],
+      "access_cell": [
+        13,
+        4
+      ],
+      "texture": "textures/qr/P010.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P011",
+      "qr_payload": "P011;2.5",
+      "weight": 2.5,
+      "shelf_cell": [
+        2,
+        5
+      ],
+      "level": 2,
+      "slot": -0.25,
+      "position": [
+        -5.75,
+        1.4,
+        -0.5
+      ],
+      "access_cell": [
+        2,
+        4
+      ],
+      "texture": "textures/qr/P011.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P012",
+      "qr_payload": "P012;8.0",
+      "weight": 8.0,
+      "shelf_cell": [
+        6,
+        5
+      ],
+      "level": 0,
+      "slot": 0.25,
+      "position": [
+        -1.25,
+        0.2,
+        -0.5
+      ],
+      "access_cell": [
+        6,
+        4
+      ],
+      "texture": "textures/qr/P012.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P013",
+      "qr_payload": "P013;14.0",
+      "weight": 14.0,
+      "shelf_cell": [
+        9,
+        5
+      ],
+      "level": 1,
+      "slot": -0.25,
+      "position": [
+        1.25,
+        0.8,
+        -0.5
+      ],
+      "access_cell": [
+        9,
+        4
+      ],
+      "texture": "textures/qr/P013.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P014",
+      "qr_payload": "P014;19.0",
+      "weight": 19.0,
+      "shelf_cell": [
+        12,
+        5
+      ],
+      "level": 0,
+      "slot": 0.25,
+      "position": [
+        4.75,
+        0.2,
+        -0.5
+      ],
+      "access_cell": [
+        12,
+        4
+      ],
+      "texture": "textures/qr/P014.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P015",
+      "qr_payload": "P015;3.0",
+      "weight": 3.0,
+      "shelf_cell": [
+        3,
+        6
+      ],
+      "level": 1,
+      "slot": -0.25,
+      "position": [
+        -4.75,
+        0.8,
+        0.5
+      ],
+      "access_cell": [
+        3,
+        7
+      ],
+      "texture": "textures/qr/P015.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P016",
+      "qr_payload": "P016;10.5",
+      "weight": 10.5,
+      "shelf_cell": [
+        11,
+        6
+      ],
+      "level": 2,
+      "slot": 0.25,
+      "position": [
+        3.75,
+        1.4,
+        0.5
+      ],
+      "access_cell": [
+        11,
+        7
+      ],
+      "texture": "textures/qr/P016.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P017",
+      "qr_payload": "P017;5.5",
+      "weight": 5.5,
+      "shelf_cell": [
+        5,
+        8
+      ],
+      "level": 0,
+      "slot": -0.25,
+      "position": [
+        -2.75,
+        0.2,
+        2.5
+      ],
+      "access_cell": [
+        5,
+        7
+      ],
+      "texture": "textures/qr/P017.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P018",
+      "qr_payload": "P018;13.0",
+      "weight": 13.0,
+      "shelf_cell": [
+        9,
+        8
+      ],
+      "level": 2,
+      "slot": 0.25,
+      "position": [
+        1.75,
+        1.4,
+        2.5
+      ],
+      "access_cell": [
+        9,
+        7
+      ],
+      "texture": "textures/qr/P018.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P019",
+      "qr_payload": "P019;7.5",
+      "weight": 7.5,
+      "shelf_cell": [
+        2,
+        9
+      ],
+      "level": 1,
+      "slot": -0.25,
+      "position": [
+        -5.75,
+        0.8,
+        3.5
+      ],
+      "access_cell": [
+        2,
+        10
+      ],
+      "texture": "textures/qr/P019.png",
+      "present": true,
+      "world_qr": null
+    },
+    {
+      "id": "P020",
+      "qr_payload": "P020;16.0",
+      "weight": 16.0,
+      "shelf_cell": [
+        13,
+        9
+      ],
+      "level": 0,
+      "slot": -0.25,
+      "position": [
+        5.25,
+        0.2,
+        3.5
+      ],
+      "access_cell": [
+        13,
+        10
+      ],
+      "texture": "textures/qr/P020.png",
+      "present": true,
+      "world_qr": "P999;6.0"
+    }
+  ]
+}

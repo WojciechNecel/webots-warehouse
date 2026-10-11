@@ -1,0 +1,474 @@
+#VRML_SIM R2023b utf8
+# ============================================================================
+# WarehouseRobot.proto — model mobilnego robota magazynowego (Webots R2023b)
+#
+# PRZEZNACZENIE:
+#   Parametryzowany model (PROTO) robota magazynowego do automatycznej
+#   kompletacji zamowien: nawigacja miedzy regalami, podnosnik z kamera
+#   do skanowania kodow QR, chwytak do paczek (do 20 kg) oraz platforma
+#   odkladcza (limit logiczny 50 kg, wymuszany przez kontroler).
+#
+# SPOSOB UZYCIA (w pliku swiata worlds/warehouse.wbt):
+#   EXTERNPROTO "../protos/WarehouseRobot.proto"
+#   WarehouseRobot {
+#     translation -0.5 0 5.5        # komorka startowa [7,11]
+#     rotation 0 1 0 0              # przod na polnoc (-Z)
+#     controller "warehouse_controller"
+#   }
+#
+# POLA PROTO:
+#   translation SFVec3f    — polozenie robota; poczatek ukladu (origin) jest
+#                            na poziomie podlogi (y=0 = punkt kontaktu kol).
+#   rotation    SFRotation — orientacja; 0 1 0 0 = przod robota na -Z.
+#   name        SFString   — nazwa instancji (domyslnie "WarehouseRobot").
+#   controller  SFString   — kontroler (domyslnie "warehouse_controller").
+#
+# KONWENCJE GEOMETRYCZNE:
+#   - Lokalny przod robota = -Z. Dodatnia predkosc OBU kol = jazda do przodu
+#     (osi przegubow kol ustawione na -1 0 0, wiec dodatnia predkosc silnika
+#     obraca kola "do przodu" wzgledem -Z).
+#   - Kamera i palce chwytaka patrza/dzialaja w strone lokalnego -Z.
+#   - Os Y skierowana w gore; podloga hali to plaszczyzna XZ.
+#   - Masa calkowita ~30 kg (korpus 24 + kola 2x2 + glowica 1.4 + palce 2x0.25).
+#   - Korpus zwieziony do 0.5 x 0.3 x 0.7 m (obrot w alei 1.0 m bez kontaktu
+#     z regalami); materialy kontaktowe: 'tire' (kola) / 'body' (korpus+slizgi).
+#
+# STRUKTURA MODELU (hierarchia wezlow):
+#   Robot (supervisor TRUE)
+#   ├── korpus 0.5 x 0.3 x 0.7 m (srodek y=0.20) + platforma odkladcza
+#   │   0.5 x 0.5 m na gorze korpusu (y=0.36) + maszt windy (do y=2.05)
+#   ├── HingeJoint "kolo lewe"  (x=-0.32) — RotationalMotor "wheel_left"
+#   ├── HingeJoint "kolo prawe" (x=+0.32) — RotationalMotor "wheel_right"
+#   │     kola: promien 0.08 m, szerokosc 0.05 m, osie w punkcie y=0.08
+#   ├── SliderJoint "winda" (os +Y, zakres 0-1.6 m) — LinearMotor "lift_motor"
+#   │   └── Solid "glowica" (baza na gorze korpusu, y=0.35 przy lift=0)
+#   │       ├── Camera "camera" 640x480, fov 1.0 — wysokosc 0.25 + lift,
+#   │       │   patrzy na lokalne -Z po obrocie osi kamery (+X)
+#   │       ├── SliderJoint (os +X, 0-0.05 m) — LinearMotor "gripper_left"
+#   │       └── SliderJoint (os -X, 0-0.05 m) — LinearMotor "gripper_right"
+#   │             palce startowo na x=±0.20 (swiatlo 0.38 m); dodatnia pozycja
+#   │             OBU silnikow domyka chwytak do swiatla ~0.28 m (paczka)
+#   └── 5 x DistanceSensor (type "generic", lookupTable 0-1.5 m):
+#         ds_front_left, ds_front_right (przod, -Z), ds_left (-X),
+#         ds_right (+X), ds_back (tyl, +Z)
+#
+# URZADZENIA (nazwy SZTYWNE — kontroler odwoluje sie do nich przez getDevice):
+#   wheel_left, wheel_right — RotationalMotor (maxVelocity 12 rad/s)
+#   lift_motor              — LinearMotor, pozycja 0-1.6 m; wysokosc kamery
+#                             = 0.2 + pozycja, wiec poziom L regalu wymaga
+#                             lift = levels[L] - 0.2  (levels=[0.2,0.8,1.4])
+#   gripper_left, gripper_right — LinearMotor, pozycja 0-0.05 m
+#                             (0 = otwarty 0.38 m, 0.05 = domkniety ~0.28 m)
+#   camera                  — Camera 640x480, fieldOfView 1.0, na glowicy
+#   ds_front_left, ds_front_right, ds_left, ds_right, ds_back — DistanceSensor
+#                             (generic, lookupTable [0->1023 ... 1.5->0])
+#
+# UWAGI FIZYCZNE:
+#   - Stabilnosc zapewniaja dwa slizgi (kulki r=0.025 m) w bryle korpusu
+#     (przod/tyl, y=0.025), wpisane w boundingObject robota.
+#   - boundingObject = Group (korpus, platforma, maszt, slizgi); kola, glowica
+#     i palce maja wlasne boundingObject na przegubach.
+# ============================================================================
+
+PROTO WarehouseRobot [
+  field SFVec3f    translation  0 0 0                    # pozycja; origin na poziomie podlogi
+  field SFRotation rotation     0 1 0 0                  # 0 1 0 0 = przod na -Z (polnoc)
+  field SFString   name         "WarehouseRobot"         # nazwa instancji robota
+  field SFString   controller   "warehouse_controller"   # kontroler FSM kompletacji
+]
+{
+  Robot {
+    translation IS translation
+    rotation IS rotation
+    name IS name
+    model "WarehouseRobot"
+    description "Mobilny robot magazynowy do kompletacji zamowien (QR, FSM, raporty JSON)"
+    controller IS controller
+    supervisor TRUE
+    children [
+      # ---- korpus glowny (wizualizacja) ----
+      Transform {
+        translation 0 0.20 0
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.12 0.32 0.78
+              metalness 0.2
+              roughness 0.6
+            }
+            geometry Box { size 0.5 0.3 0.7 }
+          }
+        ]
+      }
+      # ---- platforma odkladcza 0.5 x 0.5 m (limit logiczny 50 kg) ----
+      Transform {
+        translation 0 0.36 0.12
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.25 0.25 0.28
+              roughness 0.9
+            }
+            geometry Box { size 0.5 0.02 0.5 }
+          }
+        ]
+      }
+      # ---- maszt windy (prowadnica pionowa) ----
+      Transform {
+        translation 0 1.2 -0.15
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.5 0.5 0.55
+              metalness 0.8
+              roughness 0.35
+            }
+            geometry Box { size 0.1 1.7 0.1 }
+          }
+        ]
+      }
+      # ---- slizgi stabilizujace w bryle korpusu (przod / tyl) ----
+      Transform {
+        translation 0 0.025 -0.28
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.1 0.1 0.1
+              roughness 0.8
+            }
+            geometry Sphere { radius 0.025 }
+          }
+        ]
+      }
+      Transform {
+        translation 0 0.025 0.28
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.1 0.1 0.1
+              roughness 0.8
+            }
+            geometry Sphere { radius 0.025 }
+          }
+        ]
+      }
+      # ---- kolo lewe (x=-0.32): HingeJoint + RotationalMotor ----
+      HingeJoint {
+        jointParameters HingeJointParameters {
+          axis -1 0 0            # dodatnia predkosc = jazda do przodu (-Z)
+          anchor -0.27 0.08 0
+        }
+        device [
+          RotationalMotor {
+            name "wheel_left"
+            maxVelocity 12
+            maxTorque 8
+          }
+          PositionSensor {
+            name "wheel_left_sensor"
+          }
+        ]
+        endPoint DEF WHEEL_LEFT_SOLID Solid {
+          translation -0.27 0.08 0
+          name "wheel_left_solid"
+          contactMaterial "tire"
+          rotation 0 -1 0 1.5707963267948966  # Cylinder +Z -> -X (lewe kolo)
+          children [
+            Shape {
+              appearance PBRAppearance {
+                baseColor 0.05 0.05 0.05
+                roughness 0.95
+              }
+              geometry Cylinder {
+                height 0.05
+                radius 0.08
+                subdivision 24
+              }
+            }
+            # bialy marker na obreczy -- rotacja kola jest widoczna
+            Transform {
+              translation 0.06 0 0.028
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 1 1 1
+                    emissiveColor 1 1 1
+                    emissiveIntensity 0.5
+                  }
+                  geometry Box { size 0.02 0.02 0.015 }
+                }
+              ]
+            }
+          ]
+          boundingObject Cylinder {
+            height 0.05
+            radius 0.08
+          }
+          physics Physics {
+            density -1
+            mass 2
+          }
+        }
+      }
+      # ---- kolo prawe (x=+0.32): HingeJoint + RotationalMotor ----
+      HingeJoint {
+        jointParameters HingeJointParameters {
+          axis -1 0 0            # dodatnia predkosc = jazda do przodu (-Z)
+          anchor 0.27 0.08 0
+        }
+        device [
+          RotationalMotor {
+            name "wheel_right"
+            maxVelocity 12
+            maxTorque 8
+          }
+          PositionSensor {
+            name "wheel_right_sensor"
+          }
+        ]
+        endPoint DEF WHEEL_RIGHT_SOLID Solid {
+          translation 0.27 0.08 0
+          name "wheel_right_solid"
+          contactMaterial "tire"
+          rotation 0 1 0 1.5707963267948966  # Cylinder +Z -> +X (prawe kolo)
+          children [
+            Shape {
+              appearance PBRAppearance {
+                baseColor 0.05 0.05 0.05
+                roughness 0.95
+              }
+              geometry Cylinder {
+                height 0.05
+                radius 0.08
+                subdivision 24
+              }
+            }
+            # bialy marker na obreczy -- rotacja kola jest widoczna
+            Transform {
+              translation 0.06 0 0.028
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 1 1 1
+                    emissiveColor 1 1 1
+                    emissiveIntensity 0.5
+                  }
+                  geometry Box { size 0.02 0.02 0.015 }
+                }
+              ]
+            }
+          ]
+          boundingObject Cylinder {
+            height 0.05
+            radius 0.08
+          }
+          physics Physics {
+            density -1
+            mass 2
+          }
+        }
+      }
+      # ---- winda pionowa: SliderJoint + LinearMotor (zakres 0-1.6 m) ----
+      SliderJoint {
+        jointParameters JointParameters {
+          axis 0 1 0
+        }
+        device [
+          LinearMotor {
+            name "lift_motor"
+            minPosition 0
+            maxPosition 1.6
+            maxForce 120
+          }
+        ]
+        endPoint Solid {
+          translation 0 0.35 -0.15
+          name "lift_head"   # baza glowicy: gora korpusu, przod
+          children [
+            # obudowa glowicy
+            Shape {
+              appearance PBRAppearance {
+                baseColor 0.95 0.55 0.1
+                roughness 0.5
+              }
+              geometry Box { size 0.34 0.12 0.24 }
+            }
+            # kamera QR: wysokosc swiatowa = 0.2 + lift; patrzy na -Z
+            Camera {
+              translation 0 -0.10 -0.24   # nad palcami; optyka na y=0.25 + lift
+              rotation -1 1 1 2.0943951023931953  # Camera +X -> -Z, +Z (gora obrazu) -> +Y
+              name "camera"
+              width 640
+              height 480
+              fieldOfView 1.0
+            }
+            # ---- palec lewy chwytaka (os +X: dodatnia pozycja = domykanie) ----
+            SliderJoint {
+              jointParameters JointParameters {
+                axis 1 0 0
+              }
+              device [
+                LinearMotor {
+                  name "gripper_left"
+                  minPosition 0
+                  maxPosition 0.05
+                  maxForce 60
+                }
+              ]
+              endPoint Solid {
+                translation -0.20 -0.20 -0.27  # palce przed korpusem: z=-0.47..-0.37
+                name "finger_left"
+                children [
+                  Shape {
+                    appearance PBRAppearance {
+                      baseColor 0.9 0.8 0.1
+                      roughness 0.5
+                    }
+                    geometry Box { size 0.02 0.10 0.10 }
+                  }
+                ]
+                boundingObject Box { size 0.02 0.10 0.10 }
+                physics Physics {
+                  density -1
+                  mass 0.25
+                }
+              }
+            }
+            # ---- palec prawy chwytaka (os -X: dodatnia pozycja = domykanie) ----
+            SliderJoint {
+              jointParameters JointParameters {
+                axis -1 0 0
+              }
+              device [
+                LinearMotor {
+                  name "gripper_right"
+                  minPosition 0
+                  maxPosition 0.05
+                  maxForce 60
+                }
+              ]
+              endPoint Solid {
+                translation 0.20 -0.20 -0.27  # palce przed korpusem: z=-0.47..-0.37
+                name "finger_right"
+                children [
+                  Shape {
+                    appearance PBRAppearance {
+                      baseColor 0.9 0.8 0.1
+                      roughness 0.5
+                    }
+                    geometry Box { size 0.02 0.10 0.10 }
+                  }
+                ]
+                boundingObject Box { size 0.02 0.10 0.10 }
+                physics Physics {
+                  density -1
+                  mass 0.25
+                }
+              }
+            }
+          ]
+          boundingObject Group {
+            children [
+              Transform {
+                translation 0 0 0
+                children [
+                  Shape { geometry Box { size 0.34 0.12 0.24 } }
+                ]
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 1.4
+          }
+        }
+      }
+      # ---- czujniki odleglosci (generic, zakres uzyteczny 0-1.5 m) ----
+      DistanceSensor {
+        translation -0.2 0.18 -0.36
+        rotation 0 1 0 1.5707963267948966  # +X -> -Z (przod)
+        name "ds_front_left"
+        type "generic"
+        lookupTable [ 0 1023 0, 1.5 0 0 ]
+        numberOfRays 1
+        aperture 0.2
+      }
+      DistanceSensor {
+        translation 0.2 0.18 -0.36
+        rotation 0 1 0 1.5707963267948966  # +X -> -Z (przod)
+        name "ds_front_right"
+        type "generic"
+        lookupTable [ 0 1023 0, 1.5 0 0 ]
+        numberOfRays 1
+        aperture 0.2
+      }
+      DistanceSensor {
+        translation -0.26 0.18 0
+        rotation 0 1 0 3.141592653589793   # +X -> -X (lewo)
+        name "ds_left"
+        type "generic"
+        lookupTable [ 0 1023 0, 1.5 0 0 ]
+        numberOfRays 1
+        aperture 0.2
+      }
+      DistanceSensor {
+        translation 0.26 0.18 0
+        rotation 0 1 0 0                   # +X (prawo)
+        name "ds_right"
+        type "generic"
+        lookupTable [ 0 1023 0, 1.5 0 0 ]
+        numberOfRays 1
+        aperture 0.2
+      }
+      DistanceSensor {
+        translation 0 0.18 0.36
+        rotation 0 1 0 -1.5707963267948966 # +X -> +Z (tyl)
+        name "ds_back"
+        type "generic"
+        lookupTable [ 0 1023 0, 1.5 0 0 ]
+        numberOfRays 1
+        aperture 0.2
+      }
+    ]
+    # boundingObject calego robota: korpus + platforma + maszt + slizgi
+    boundingObject Group {
+      children [
+        Transform {
+          translation 0 0.20 0
+          children [
+            Shape { geometry Box { size 0.5 0.3 0.7 } }
+          ]
+        }
+        Transform {
+          translation 0 0.36 0.12
+          children [
+            Shape { geometry Box { size 0.5 0.02 0.5 } }
+          ]
+        }
+        Transform {
+          translation 0 1.2 -0.15
+          children [
+            Shape { geometry Box { size 0.1 1.7 0.1 } }
+          ]
+        }
+        Transform {
+          translation 0 0.025 -0.28
+          children [
+            Shape { geometry Sphere { radius 0.025 } }
+          ]
+        }
+        Transform {
+          translation 0 0.025 0.28
+          children [
+            Shape { geometry Sphere { radius 0.025 } }
+          ]
+        }
+      ]
+    }
+    contactMaterial "body"
+    physics Physics {
+      density -1
+      mass 24
+    }
+  }
+}

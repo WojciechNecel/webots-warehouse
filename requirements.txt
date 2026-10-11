@@ -1,0 +1,4 @@
+opencv-python==5.0.0.93
+numpy==2.2.3
+qrcode==8.2
+pillow==11.1.0

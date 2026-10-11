@@ -1,0 +1,33 @@
+{
+  "order_id": "ORD-002",
+  "items": [
+    {
+      "product_id": "P003",
+      "expected_weight": 12.0
+    },
+    {
+      "product_id": "P006",
+      "expected_weight": 9.5
+    },
+    {
+      "product_id": "P008",
+      "expected_weight": 15.0
+    },
+    {
+      "product_id": "P010",
+      "expected_weight": 11.0
+    },
+    {
+      "product_id": "P013",
+      "expected_weight": 14.0
+    },
+    {
+      "product_id": "P016",
+      "expected_weight": 10.5
+    },
+    {
+      "product_id": "P018",
+      "expected_weight": 13.0
+    }
+  ]
+}
