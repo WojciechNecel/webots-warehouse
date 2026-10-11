@@ -27,12 +27,15 @@
 #   - Podloga 18 x 14 m + 4 sciany 2.5 m jako jawne statyczne Solidy
 #     (RectangleArena z EXTERNPROTO nie dawala czynnych kolizji).
 #   - 60 regalow (DEF SHELF_<c>_<r>, statyczne: 4 slupki + 3 polki),
-#   - produkty (DEF PRODUCT_<id>, fizyka, masa = waga, tekstura QR;
+#   - produkty (DEF PRODUCT_<id>, fizyka, masa = waga, tekstura QR,
+#     recognitionColors [1 0 0] -- wymagane do detekcji przez Recognition;
 #     P005 celowo pomijany -- scenariusz "brak produktu"; box na miejscu
 #     P020 nosi teksture P999.png -- scenariusz "zly produkt na polce"),
 #   - strefa terminala (DEF TERMINAL_ZONE) + kiosk (DEF TERMINAL),
 #   - 3 przeszkody dynamiczne (DEF OBSTACLE_1..3),
-#   - instancja robota WarehouseRobot (kontroler "warehouse_controller"),
+#   - DWIE instancje robota WarehouseRobot (kontroler "warehouse_controller"):
+#     robot 1 w komorce (7,11) x=-0.5 z=5.5, robot 2 ("WarehouseRobot2")
+#     w komorce (1,11) x=-6.5 z=5.5,
 #   - Robot "mcp_bridge" (supervisor TRUE) -- pomost dla serwera MCP
 #     (https://github.com/MHasaan/webotMCP); wymaga skopiowania
 #     controllers/mcp_bridge (patrz README.md, sekcja MCP).
@@ -69,7 +72,7 @@ EXTERNPROTOS = [
 POINT_LIGHTS = [(x, z) for z in (-4.5, -1.5, 1.5, 4.5) for x in (-5.0, 0.0, 5.0)]
 
 # Przeszkody dynamiczne (DEF OBSTACLE_<n>): pozycje (x, z) na alejach.
-OBSTACLES = [(0.5, -1.5), (-4.5, 1.5), (2.5, 4.5)]
+OBSTACLES = [(0.5, -1.5), (-4.5, 2.5), (2.5, 4.5)]
 
 HEADER_COMMENT = """\
 # ============================================================================
@@ -78,9 +81,10 @@ HEADER_COMMENT = """\
 # Wygenerowany przez tools/generate_world.py -- NIE EDYTUJ RECZNIE,
 # poprawki wprowadzaj w generatorze i regeneruj (python tools/generate_world.py).
 # Plik definiuje: hale 18x14 m (podloga + 4 sciany, statyczne Solidy),
-# 60 regalow pietrowych, produkty z kodami QR, strefe Terminala Zamowien,
-# 3 przeszkody dynamiczne, robota WarehouseRobot (EXTERNPROTO) oraz
-# robota-pomost mcp_bridge (MCP).
+# 60 regalow pietrowych, produkty z kodami QR (recognitionColors [1 0 0]),
+# strefe Terminala Zamowien, 3 przeszkody dynamiczne, DWA roboty
+# WarehouseRobot (EXTERNPROTO; robot 1 w komorce (7,11), WarehouseRobot2
+# w komorce (1,11)) oraz robota-pomost mcp_bridge (MCP).
 # Siatka nawigacyjna 16x12 komorek (1.0 m): srodek komorki (c,r):
 # x = -7.5 + c, z = -5.5 + r. Szczegoly: docs/architecture.md.
 # ============================================================================
@@ -169,6 +173,8 @@ def product_node(product):
 
     Gdy produkt ma ustawione `world_qr` (anomalia "zly produkt na polce"),
     na bryle ląduje tekstura kodu z payloadu world_qr zamiast wlasnego.
+    Pole `recognitionColors [1 0 0]` umozliwia wykrycie produktu przez
+    kamere z wezlem Recognition (wymog Webots dla getRecognitionObjects).
     """
     pid = product["id"]
     x, y, z = product["position"]
@@ -182,6 +188,7 @@ def product_node(product):
         f"  children [\n{box_shape((0.25, 0.25, 0.25), appearance, 4)}\n  ]\n"
         f"  boundingObject Box {{\n    size 0.25 0.25 0.25\n  }}\n"
         f"  physics Physics {{\n    density -1\n    mass {product['weight']}\n  }}\n"
+        f"  recognitionColors [\n    1 0 0\n  ]\n"
         f"}}"
     )
 
@@ -206,9 +213,9 @@ def terminal_zone_node():
     appearance = pbr((0.05, 0.65, 0.2), roughness=1.0, indent=8)
     return (
         "DEF TERMINAL_ZONE Pose {\n"
-        "  translation 0 0.01 5.5\n"
+        "  translation 0.8 0.01 5.5\n"
         "  children [\n"
-        f"{box_shape((2, 0.02, 2), appearance, 6)}\n"
+        f"{box_shape((3.6, 0.02, 2), appearance, 6)}\n"
         "  ]\n}"
     )
 
@@ -302,6 +309,10 @@ def build_world(layout, products):
     sections.append(
         "WarehouseRobot {\n  translation -0.5 0.01 5.5\n  rotation 0 1 0 0\n"
         '  controller "warehouse_controller"\n}')
+    # Druga instancja robota (komorka startowa (1,11): x=-6.5, z=5.5)
+    sections.append(
+        "WarehouseRobot {\n  translation -6.5 0.01 5.5\n  rotation 0 1 0 0\n"
+        '  name "WarehouseRobot2"\n  controller "warehouse_controller"\n}')
     sections.append(
         "DEF MCP_BRIDGE Robot {\n  translation 0 0 -10\n"
         '  name "mcp_bridge"\n  controller "mcp_bridge"\n  supervisor TRUE\n}')

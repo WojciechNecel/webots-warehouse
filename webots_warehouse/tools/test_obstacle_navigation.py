@@ -1,4 +1,5 @@
 """Regression checks for blocked goals, detours and stationary waiting."""
+import json
 import sys
 import types
 import unittest
@@ -10,6 +11,7 @@ sys.path.insert(0, str(ROOT / "controllers" / "warehouse_controller"))
 sys.modules.setdefault("controller", types.SimpleNamespace(Supervisor=Mock()))
 from warehouse_controller import WarehouseController, State
 from navigation import Navigator
+from fleet_traffic import refuge_bid, winner
 
 class NavigationRegression(unittest.TestCase):
     def setUp(self):
@@ -33,6 +35,15 @@ class NavigationRegression(unittest.TestCase):
         c.current_cell = Mock(return_value=(4, 7))
         c.resume_navigation_state = State.NAVIGATE
         c.avoid_attempts = 0
+        c.robot_id = "WarehouseRobot"
+        c.current_order = None
+        c.drop_index = 0
+        c.terminal_alternate_tried = False
+        c.unload_failed = False
+        c.wait_time = 0.0
+        c.fleet_hold = False
+        c._update_hud = Mock()
+        c.localizer = None
 
     def obstacle(self, position):
         self.children.getCount.return_value = 1
@@ -55,6 +66,15 @@ class NavigationRegression(unittest.TestCase):
         self.assertTrue(path)
         self.assertNotIn((7,4),path)
         self.assertFalse(set(path) & self.c.dynamic_blocked)
+
+    def test_unloaded_box_does_not_block_terminal_bays(self):
+        self.obstacle([1.2, 0.15, 6.4])
+        node = self.children.getMFNode.return_value
+        node.getDef.return_value = "PRODUCT_P015"
+        node.getField().getSFNode().getField().getSFVec3f.return_value = [0.3, 0.3, 0.3]
+        self.c.compute_path((7, 10), (8, 11))
+        self.assertNotIn((7, 11), self.c.dynamic_blocked)
+        self.assertNotIn((8, 11), self.c.dynamic_blocked)
 
     def test_waits_without_backing_and_resumes_when_clear(self):
         self.obstacle([-4.5685,0.2,1.4989])
@@ -89,6 +109,14 @@ class NavigationRegression(unittest.TestCase):
         self.assertFalse(self.c.follow_path([(4,7),(3,7)]))
         self.c.set_lift.assert_called_once_with(0.0)
         self.c.drive_to.assert_not_called()
+
+    def test_path_skips_recentring_after_shelf_pickup(self):
+        c = self.c
+        c.get_pose = Mock(return_value=(-2.25, -1.5, 0.0))
+        c.rotate_to = Mock(return_value=True)
+        c.drive_to = Mock(return_value=True)
+        self.assertTrue(c.follow_path([(5, 4), (6, 4)]))
+        c.drive_to.assert_called_once_with(-1.5, -1.5)
 
     def test_scan_lines_up_with_slot_before_lifting(self):
         c = self.c
@@ -138,6 +166,21 @@ class NavigationRegression(unittest.TestCase):
         fields["physics"].importSFNodeFromString.assert_called_once_with("Physics { mass 3 }")
         fields["boundingObject"].importSFNodeFromString.assert_called_once_with("Box { size .25 .25 .25 }")
         self.assertEqual(c.carried,[])
+        self.assertEqual(fields["translation"].setSFVec3f.call_args.args[0][2], 6.4)
+
+    def test_blocked_terminal_keeps_cargo_and_reports_failure(self):
+        c = self.c
+        item = types.SimpleNamespace(product_id="P018", status="ok")
+        node = Mock()
+        c.carried = [{"item": item, "node": node}]
+        c.current_order = types.SimpleNamespace(items=[item])
+        c.order_manager = Mock()
+        c._emergency_unload()
+        self.assertEqual(c.carried[0]["node"], node)
+        self.assertTrue(c.unload_failed)
+        c.order_manager.mark_unreachable.assert_called_once()
+        node.getField.assert_not_called()
+        self.assertEqual(c.state, State.REPORT)
 
     def test_blocked_terminal_does_not_unload(self):
         self.c.current_cell.return_value = (7,10)
@@ -145,6 +188,54 @@ class NavigationRegression(unittest.TestCase):
         self.c._state_return_to_terminal()
         self.assertEqual(self.c.state,State.WAIT_FOR_PATH)
         self.assertEqual(self.c.resume_navigation_state,State.RETURN_TO_TERMINAL)
+
+    def test_each_robot_has_its_own_terminal_bay(self):
+        self.c.current_cell.return_value = (9, 11)
+        self.c.compute_path = Mock(return_value=[(9, 11), (8, 11), (7, 11)])
+        self.c.follow_path = Mock(return_value=True)
+        self.c._state_return_to_terminal()
+        self.assertEqual(self.c.current_goal_cell, (7, 11))
+        self.c.robot_id = "WarehouseRobot2"
+        self.c.state = State.RETURN_TO_TERMINAL
+        self.c._state_return_to_terminal()
+        self.assertEqual(self.c.current_goal_cell, (8, 11))
+
+    def test_auction_uses_detour_cost_and_safe_refuge(self):
+        blocked = self.c.static_blocked
+        a = refuge_bid((9, 11), (7, 11), (8, 11), (8, 10), blocked, 16, 12)
+        b = refuge_bid((8, 11), (8, 10), (9, 11), (7, 11), blocked, 16, 12)
+        self.assertEqual(a[0], 2)
+        self.assertEqual(b[0], 0)
+        self.assertEqual(a[1], (9, 10))
+        self.assertEqual(winner("WarehouseRobot", a[0], "WarehouseRobot2", b[0]),
+                         "WarehouseRobot")
+        self.assertEqual(winner("WarehouseRobot", 2, "WarehouseRobot2", 2),
+                         "WarehouseRobot")
+
+    def test_first_meeting_yields_to_side_not_down_winners_route(self):
+        blocked = self.c.static_blocked
+        left = refuge_bid((7, 4), (2, 4), (5, 4), (6, 1), blocked, 16, 12)
+        right = refuge_bid((5, 4), (6, 1), (7, 4), (2, 4), blocked, 16, 12)
+        self.assertEqual(left, (2, (7, 5), [(7, 4), (7, 5)]))
+        self.assertEqual(right[1], (1, 4))
+        self.assertEqual(winner("WarehouseRobot", left[0],
+                                "WarehouseRobot2", right[0]),
+                         "WarehouseRobot2")
+
+    def test_announces_next_goal_while_picking(self):
+        c = self.c
+        c.state = State.PICK_ITEM
+        c.trip_queue = [types.SimpleNamespace(access_cell=(6, 1))]
+        c._fleet_last_announcement = None
+        c._announce_fleet_intent()
+        payload = c.robot.getSelf().getField.return_value.setSFString.call_args.args[0]
+        self.assertEqual(json.loads(payload)["goal"], [6, 1])
+
+    def test_done_state_is_announced_before_controller_stops(self):
+        c = self.c
+        c._announce_fleet_intent = Mock()
+        c.set_state(State.DONE)
+        c._announce_fleet_intent.assert_called_once_with()
 
 if __name__ == "__main__":
     unittest.main()

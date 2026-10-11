@@ -19,6 +19,7 @@ Raporty powstają w `webots_warehouse/reports/`.
 ```powershell
 python webots_warehouse/tools/test_obstacle_navigation.py
 python webots_warehouse/tools/validate_project.py
+python webots_warehouse/tools/run_headless_tests.py --timeout 420
 ```
 
 ## Aktualne zachowanie
@@ -31,15 +32,17 @@ python webots_warehouse/tools/validate_project.py
 - Transport paczek jest **kinematyczny**: skrypt ustawia ich pozycję na platformie.
   Na czas transportu wyłącza fizykę i kolizje paczki, przy rozładunku je przywraca.
   Nie jest to fizyczna symulacja chwytu ani obciążenia napędu przewożoną masą.
+- Roboty publikują pozycję i kolejny cel w `customData`. Gdy ich trasy się
+  przecinają, porównują koszt ustąpienia i wybierają bezpieczną mijankę poza
+  trasą drugiego robota. Cel kolejnej paczki jest ogłaszany już podczas pobrania.
+- Każdy robot ma własną komórkę rozładunku. Paczki trafiają za pasem dojazdu;
+  przy niedostępnym terminalu robot zatrzymuje się z ładunkiem i zgłasza błąd.
 
-Świat startowy zawiera przeszkodę `OBSTACLE_2` w komórce dostępu `(3, 7)`.
-Aby pobrać stamtąd produkt P015, przesuń przeszkodę poza trasę w Webots.
-Pozostawienie jej na miejscu powoduje prawidłowe oczekiwanie robota.
+Przeszkoda `OBSTACLE_2` jest poza komórką dostępu do P015, więc zamówienie
+`ORD-001` można zrealizować bez ręcznej zmiany świata.
 
-Walidacja 2026-10-11: 9 testów regresji i 9/9 kontroli projektu zaliczonych.
-W działającej symulacji, po usunięciu przeszkody z celu, `ORD-001` zakończyło
-się wynikiem `green`: P001, P007, P011 i P015 pobrane oraz rozładowane.
-Nie oznacza to pełnej walidacji pozostałych zamówień.
+Pełny test headless: `ORD-001` green (1 kurs), `ORD-002` green (2 kursy),
+`ORD-003` red zgodnie ze scenariuszem (1 kurs); bez awaryjnego zrzutu.
 
 ## Webots MCP
 

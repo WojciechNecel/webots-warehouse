@@ -119,6 +119,59 @@ def parse_payload(payload: str) -> tuple[str, float]:
     return product_id, weight
 
 
+def recognition_fallback(camera, expected_position,
+                         products_db: dict, max_distance: float = 0.6):
+    """Fallback identyfikacji produktu przez Recognition kamery (funkcja F3).
+
+    Uzywany, gdy odczyt QR zawiedzie (modul QRCodeDetector zwroci pusty
+    payload). Wymaga: wlaczonego Recognition w kamerze
+    (``camera.recognitionEnable(timestep)`` oraz wezla ``Recognition``
+    w polu ``recognition`` kamery w PROTO) i niepustych ``recognitionColors``
+    na Solidach produktow w swiecie.
+
+    Dopasowanie: obiekt Recognition o modelu ``PRODUCT_<id>`` najblizszy
+    oczekiwanej pozycji slotu (w promieniu ``max_distance`` metrow).
+
+    Args:
+        camera: urzadzenie Camera Webots z wlaczonym Recognition.
+        expected_position: krotka/lista (x, y, z) oczekiwanej pozycji produktu.
+        products_db: slownik ``{product_id: {"weight": ...}}`` z katalogu.
+        max_distance: maksymalny dystans dopasowania [m].
+
+    Returns:
+        Krotka ``(product_id, weight)`` albo ``None``, gdy nic nie pasuje.
+    """
+    import math as _math
+    import re as _re
+
+    try:
+        objects = camera.recognitionGetObjects()
+    except Exception:
+        return None
+
+    best_id = None
+    best_dist = max_distance
+    for obj in objects:
+        try:
+            model = obj.getModel() or ""
+        except Exception:
+            continue
+        match = _re.search(r"PRODUCT_(\w+)", model)
+        if not match:
+            continue
+        position = obj.getPosition()
+        dist = _math.dist(position, expected_position)
+        if dist < best_dist:
+            best_dist = dist
+            best_id = match.group(1)
+
+    if best_id is None:
+        return None
+    product = products_db.get(best_id)
+    weight = float(product["weight"]) if product else None
+    return best_id, weight
+
+
 if __name__ == "__main__":
     # ------------------------------------------------------------------
     # Weryfikacja offline (bez Webots):

@@ -94,6 +94,7 @@ zapis i odczyt pliku raportu.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -142,9 +143,14 @@ class OrderManager:
         Katalog wyjściowy na raporty ``report_<order_id>.json``.
     """
 
-    def __init__(self, orders_dir: str, products_path: str, reports_dir: str) -> None:
+    def __init__(self, orders_dir: str, products_path: str, reports_dir: str,
+                 robot_id: str | None = None) -> None:
         self._orders_dir = Path(orders_dir)
         self._reports_dir = Path(reports_dir)
+        # Identyfikator robota (tryb floty F8); None = jeden robot, stare
+        # zachowanie (bez rezerwacji zamowien i bez pomijania wykonanych).
+        self._robot_id = robot_id
+        self._claims_dir = self._orders_dir / ".claims"
         with open(products_path, encoding="utf-8") as f:
             products = json.load(f)["products"]
         # Indeks katalogu produktów po identyfikatorze (np. "P001").
@@ -155,40 +161,78 @@ class OrderManager:
         # Logi bieżącego zamówienia (trafiają do raportu).
         self._logs: list[str] = []
 
+    # Maksymalny wiek rezerwacji zamowienia [s]; starsze sa przejmowane.
+    CLAIM_STALE_S = 900.0
+
+    def _claim_order(self, order_id: str) -> bool:
+        """Atomowo rezerwuje zamowienie dla tego robota (tryb floty).
+
+        Tworzy ``orders/.claims/<order_id>.lock`` w trybie wykluczajacym;
+        istniejaca swieza rezerwacja innego robota blokuje, stara (> 900 s)
+        jest przejmowana. Zwraca True, gdy rezerwacja sie powiodla.
+        """
+        self._claims_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = self._claims_dir / f"{order_id}.lock"
+        try:
+            if lock_path.exists():
+                age_s = time.time() - lock_path.stat().st_mtime
+                if age_s < self.CLAIM_STALE_S:
+                    return False
+        except OSError:
+            # plik chwilowo zablokowany (OneDrive/inny proces) -- traktuj
+            # jako zajety, zamiast wywalac kontroler
+            return False
+        try:
+            with open(lock_path, "x", encoding="utf-8") as f:
+                f.write(f"{self._robot_id} {datetime.now().isoformat()}")
+            return True
+        except (FileExistsError, OSError):
+            return False
+
     def next_order(self) -> Order | None:
         """Zwraca kolejne zamówienie (wg nazwy pliku) lub None, gdy koniec.
 
         Każda pozycja jest wzbogacana o dane z ``products.json``: wagę
         katalogową, komórkę regału, poziom, slot, komórkę dostępu i pozycję
         w świecie. Produkt nieobecny w katalogu pozostawia te pola jako None.
+
+        Tryb floty (robot_id ustawiony): pomija zamowienia zarezerwowane
+        przez innego robota (plik blokady w ``orders/.claims/``); wolne
+        zamowienie jest rezerwowane atomowo przed zwroceniem. Zamowienia
+        z istniejacym raportem NIE sa pomijane (restart symulacji = nowa
+        sesja pracy; blokady czysci kontroler przy starcie).
         """
-        if self._next_index >= len(self._order_files):
-            return None
-        path = self._order_files[self._next_index]
-        self._next_index += 1
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        items: list[OrderItem] = []
-        for raw in data["items"]:
-            item = OrderItem(
-                product_id=raw["product_id"],
-                expected_weight=float(raw["expected_weight"]),
+        while self._next_index < len(self._order_files):
+            path = self._order_files[self._next_index]
+            self._next_index += 1
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            order_id = data["order_id"]
+            if self._robot_id is not None:
+                if not self._claim_order(order_id):
+                    continue
+            items: list[OrderItem] = []
+            for raw in data["items"]:
+                item = OrderItem(
+                    product_id=raw["product_id"],
+                    expected_weight=float(raw["expected_weight"]),
+                )
+                product = self._products.get(item.product_id)
+                if product is not None:
+                    item.weight = float(product["weight"])
+                    item.shelf_cell = tuple(product["shelf_cell"])
+                    item.level = int(product["level"])
+                    item.slot = float(product["slot"])
+                    item.access_cell = tuple(product["access_cell"])
+                    item.position = tuple(product["position"])
+                items.append(item)
+            self._logs = []
+            order = Order(order_id=order_id, items=items)
+            self._logs.append(
+                f"Wczytano zamówienie {order.order_id} ({len(items)} pozycji)."
             )
-            product = self._products.get(item.product_id)
-            if product is not None:
-                item.weight = float(product["weight"])
-                item.shelf_cell = tuple(product["shelf_cell"])
-                item.level = int(product["level"])
-                item.slot = float(product["slot"])
-                item.access_cell = tuple(product["access_cell"])
-                item.position = tuple(product["position"])
-            items.append(item)
-        self._logs = []
-        order = Order(order_id=data["order_id"], items=items)
-        self._logs.append(
-            f"Wczytano zamówienie {order.order_id} ({len(items)} pozycji)."
-        )
-        return order
+            return order
+        return None
 
     def mark_ok(self, item: OrderItem) -> None:
         """Oznacza pozycję jako pobraną pomyślnie (status ``ok``)."""
@@ -225,6 +269,17 @@ class OrderManager:
             )
         self._logs.append(f"{item.product_id}: {item.message}.")
 
+    def mark_unreachable(self, item: OrderItem,
+                         reason: str = "cel zajęty przez przeszkodę") -> None:
+        """Oznacza pozycje jako niedostepna (flaga zamowienia -> red).
+
+        Komunikat wariantowy dostepowy:
+        ``Blad dostepu [regal [c,r] poziom L] - <reason>``.
+        """
+        item.status = "wrong_product"
+        item.message = f"Błąd dostępu {self._location_label(item)} - {reason}"
+        self._logs.append(f"{item.product_id}: {item.message}.")
+
     def mark_missing(self, item: OrderItem) -> None:
         """Oznacza pozycję jako nieobecną na półce (status ``missing``)."""
         item.status = "missing"
@@ -245,6 +300,7 @@ class OrderManager:
         )
         return {
             "order_id": order.order_id,
+            "robot_id": self._robot_id,
             "flag": flag,
             "trips": trips,
             "timestamp": datetime.now().isoformat(),

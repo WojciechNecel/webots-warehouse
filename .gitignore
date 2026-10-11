@@ -11,6 +11,9 @@ venv/
 .idea/
 webots_warehouse/logs/
 webots_warehouse/reports/
+webots_warehouse/reports_ci/
+webots_warehouse/orders/.claims/
+webots_warehouse/smoke_out.log
 webots_warehouse/tools/_patch_*.py
 *.wbproj
 .DS_Store

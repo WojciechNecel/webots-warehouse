@@ -6,9 +6,10 @@
 # Wygenerowany przez tools/generate_world.py -- NIE EDYTUJ RECZNIE,
 # poprawki wprowadzaj w generatorze i regeneruj (python tools/generate_world.py).
 # Plik definiuje: hale 18x14 m (podloga + 4 sciany, statyczne Solidy),
-# 60 regalow pietrowych, produkty z kodami QR, strefe Terminala Zamowien,
-# 3 przeszkody dynamiczne, robota WarehouseRobot (EXTERNPROTO) oraz
-# robota-pomost mcp_bridge (MCP).
+# 60 regalow pietrowych, produkty z kodami QR (recognitionColors [1 0 0]),
+# strefe Terminala Zamowien, 3 przeszkody dynamiczne, DWA roboty
+# WarehouseRobot (EXTERNPROTO; robot 1 w komorce (7,11), WarehouseRobot2
+# w komorce (1,11)) oraz robota-pomost mcp_bridge (MCP).
 # Siatka nawigacyjna 16x12 komorek (1.0 m): srodek komorki (c,r):
 # x = -7.5 + c, z = -5.5 + r. Szczegoly: docs/architecture.md.
 # ============================================================================
@@ -238,7 +239,7 @@ DEF WALL_E Solid {
   locked TRUE
 }
 DEF TERMINAL_ZONE Pose {
-  translation 0 0.01 5.5
+  translation 0.8 0.01 5.5
   children [
       Shape {
         appearance         PBRAppearance {
@@ -247,7 +248,7 @@ DEF TERMINAL_ZONE Pose {
           metalness 0.0
         }
         geometry Box {
-          size 2 0.02 2
+          size 3.6 0.02 2
         }
       }
   ]
@@ -10044,6 +10045,9 @@ DEF PRODUCT_P001 Solid {
     density -1
     mass 3.5
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P002 Solid {
   translation -3.25 0.8 -3.5
@@ -10069,6 +10073,9 @@ DEF PRODUCT_P002 Solid {
     density -1
     mass 7.0
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P003 Solid {
   translation -1.75 1.4 -3.5
@@ -10094,6 +10101,9 @@ DEF PRODUCT_P003 Solid {
     density -1
     mass 12.0
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P004 Solid {
   translation 1.75 0.8 -3.5
@@ -10119,6 +10129,9 @@ DEF PRODUCT_P004 Solid {
     density -1
     mass 5.0
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P006 Solid {
   translation 5.75 1.4 -3.5
@@ -10144,6 +10157,9 @@ DEF PRODUCT_P006 Solid {
     density -1
     mass 9.5
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P007 Solid {
   translation -5.75 0.8 -2.5
@@ -10169,6 +10185,9 @@ DEF PRODUCT_P007 Solid {
     density -1
     mass 4.0
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P008 Solid {
   translation -2.25 0.2 -2.5
@@ -10194,6 +10213,9 @@ DEF PRODUCT_P008 Solid {
     density -1
     mass 15.0
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P009 Solid {
   translation 2.25 1.4 -2.5
@@ -10219,6 +10241,9 @@ DEF PRODUCT_P009 Solid {
     density -1
     mass 6.5
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P010 Solid {
   translation 5.75 0.8 -2.5
@@ -10244,6 +10269,9 @@ DEF PRODUCT_P010 Solid {
     density -1
     mass 11.0
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P011 Solid {
   translation -5.75 1.4 -0.5
@@ -10269,6 +10297,9 @@ DEF PRODUCT_P011 Solid {
     density -1
     mass 2.5
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P012 Solid {
   translation -1.25 0.2 -0.5
@@ -10294,6 +10325,9 @@ DEF PRODUCT_P012 Solid {
     density -1
     mass 8.0
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P013 Solid {
   translation 1.25 0.8 -0.5
@@ -10319,6 +10353,9 @@ DEF PRODUCT_P013 Solid {
     density -1
     mass 14.0
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P014 Solid {
   translation 4.75 0.2 -0.5
@@ -10344,6 +10381,9 @@ DEF PRODUCT_P014 Solid {
     density -1
     mass 19.0
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P015 Solid {
   translation -4.75 0.8 0.5
@@ -10369,6 +10409,9 @@ DEF PRODUCT_P015 Solid {
     density -1
     mass 3.0
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P016 Solid {
   translation 3.75 1.4 0.5
@@ -10394,6 +10437,9 @@ DEF PRODUCT_P016 Solid {
     density -1
     mass 10.5
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P017 Solid {
   translation -2.75 0.2 2.5
@@ -10419,6 +10465,9 @@ DEF PRODUCT_P017 Solid {
     density -1
     mass 5.5
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P018 Solid {
   translation 1.75 1.4 2.5
@@ -10444,6 +10493,9 @@ DEF PRODUCT_P018 Solid {
     density -1
     mass 13.0
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P019 Solid {
   translation -5.75 0.8 3.5
@@ -10469,6 +10521,9 @@ DEF PRODUCT_P019 Solid {
     density -1
     mass 7.5
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF PRODUCT_P020 Solid {
   translation 5.25 0.2 3.5
@@ -10494,6 +10549,9 @@ DEF PRODUCT_P020 Solid {
     density -1
     mass 16.0
   }
+  recognitionColors [
+    1 0 0
+  ]
 }
 DEF OBSTACLE_1 Solid {
   translation 0.5 0.2 -1.5
@@ -10519,7 +10577,7 @@ DEF OBSTACLE_1 Solid {
   }
 }
 DEF OBSTACLE_2 Solid {
-  translation -4.5 0.2 1.5
+  translation -4.5 0.2 2.5
   name "OBSTACLE_2"
   children [
     Shape {
@@ -10567,6 +10625,12 @@ DEF OBSTACLE_3 Solid {
 WarehouseRobot {
   translation -0.5 0.01 5.5
   rotation 0 1 0 0
+  controller "warehouse_controller"
+}
+WarehouseRobot {
+  translation -6.5 0.01 5.5
+  rotation 0 1 0 0
+  name "WarehouseRobot2"
   controller "warehouse_controller"
 }
 DEF MCP_BRIDGE Robot {

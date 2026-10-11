@@ -91,8 +91,10 @@ from pathlib import Path
 from controller import Supervisor
 
 from navigation import Navigator
-from qr_scanner import QRScanner, parse_payload
+from qr_scanner import QRScanner, parse_payload, recognition_fallback
 from order_manager import OrderManager
+from localization import Localizer
+from fleet_traffic import refuge_bid, winner
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +108,9 @@ ORDERS_DIR = ROOT_DIR / "orders"
 REPORTS_DIR = ROOT_DIR / "reports"
 
 WHEEL_RADIUS = 0.08          # promień koła [m] (zgodnie z WarehouseRobot.proto)
+TRACK_WIDTH = 0.54           # rozstaw kol [m] (kola na x=+-0.27 w proto)
+
+USE_LOCALIZATION = True      # F1: odometria (enkodery+IMU) zamiast Supervisor ground truth
 MAX_WHEEL_SPEED = 6.0        # maks. prędkość kątowa kół [rad/s]
 DRIVE_SPEED = 5.0            # prędkość jazdy na wprost [rad/s]
 TURN_SPEED = 2.5             # prędkość obrotu w miejscu [rad/s]
@@ -122,6 +127,10 @@ DS_THRESHOLD = 900.0         # próg czujników odległości (większe = bliżej
 BACKUP_DISTANCE = 0.3        # długość cofki po wykryciu przeszkody [m]
 FRONT_PROBE_DISTANCE = 0.6   # odległość sondowania komórki przed robotem [m]
 MAX_AVOID_ATTEMPTS = 8       # maks. liczba kolejnych prób omijania przeszkody
+WAIT_TIMEOUT_S = 20.0        # po tylu sekundach czekania na droge pozycja jest odkladana
+MAX_ITEM_DEFERS = 2          # po tylu odlozeniach pozycja -> status niedostepna
+FLEET_MEETING_DISTANCE = 2.1   # mijanka zanim czujniki wymusza objazd
+FLEET_CLEAR_DISTANCE = 3.0    # zwyciezca musi minac skrzyzowanie [m]
 
 PLATFORM_LOAD_LIMIT = 50.0   # limit ładunku platformy [kg]
 WEIGHT_TOLERANCE = 0.05      # tolerancja porównania wagi z QR [kg]
@@ -143,9 +152,16 @@ PLATFORM_SLOT_Z = 0.15       # offset slotu platformy wzdłuż osi Z robota [m]
 PLATFORM_SLOT_Y0 = 0.50      # bazowa wysokość slotu platformy [m]
 PLATFORM_SLOT_DY = 0.3       # przyrost wysokości kolejnego slotu [m]
 
-DROP_ZONE_X = 0.5            # rządek zrzutu w strefie terminala: stałe x [m]
-DROP_ZONE_Z0 = 4.7           # rządek zrzutu: początkowe z [m]
-DROP_ZONE_DZ = 0.35          # odstęp między paczkami w rządku [m]
+# Siatka zrzutu ZA miejscem parkowania w strefie terminala (paczki nigdy
+# nie lądują w footprintcie robota ani na torze dojazdu do komórek (7,11)/
+# (8,11)); blok kolumn przesunięty dla WarehouseRobot2 (brak kolizji zrzutow
+# miedzy robotami); licznik zrzutu jest TRWALY (brak nakladania miedzy
+# kursami i zamowieniami).
+DROP_GRID_X0 = 1.2           # pierwsza kolumna siatki zrzutu, x [m]
+DROP_GRID_DX = 0.35          # odstep miedzy kolumnami [m]
+DROP_GRID_COLS = 5           # liczba kolumn w bloku jednego robota
+DROP_GRID_Z0 = 6.4           # poza rzedem dojazdu terminala (z=5.5)
+DROP_GRID_DZ = 0.3           # drugi rzad miesci sie przed sciana (z<7)
 DROP_ZONE_Y = 0.13            # wysokość zrzutu (środek paczki) [m]
 
 SHELF_ROWS_SOUTH_VIEW = (2, 5, 8)   # regały oglądane z północy -> robot patrzy +Z
@@ -232,7 +248,27 @@ class WarehouseController:
         self.scan_payload: str | None = None
         self.avoid_attempts = 0
         self.verify_node = None           # węzeł produktu zweryfikowanego do pobrania
+        self.drop_index = 0             # trwaly licznik zrzutow (siatka)
+        self.wait_time = 0.0            # czas spedzony w WAIT_FOR_PATH [s]
+        self.defer_counts: dict = {}    # product_id -> liczba odlozen
+        self.terminal_alternate_tried = False  # proba drugiej komorki terminala
+        self.unload_failed = False
+        self.fleet_refuge = None
+        self.fleet_refuge_path = []
+        self.fleet_yielding = False
+        self.fleet_hold_time = 0.0
+        self.fleet_hold = False
+        self.fleet_peer = None
+        self._fleet_last_announcement = None
+        self._fleet_last_bid = None
         self.finished = False             # flaga zakończenia pracy (stan DONE)
+
+        # F1: estymator pozy z czujnikow pokladowych (enkodery kol + IMU)
+        self.localizer: Localizer | None = None
+        # F8: identyfikator robota (z pola name instancji w swiecie)
+        self.robot_id = "WarehouseRobot"
+        # F3: katalog wag produktow (do fallbacku Recognition)
+        self.products_db: dict = {}
 
     # ------------------------------------------------------------------
     # Narzędzia kroku symulacji i pozy robota
@@ -242,7 +278,10 @@ class WarehouseController:
         """Wykonuje krok symulacji i aktualizuje kinematykę noszonych produktów."""
         if self.robot.step(self.timestep) == -1:
             return False
+        if self.localizer is not None:
+            self.localizer.update()
         self._update_carried()
+        self._announce_fleet_intent()
         return True
 
     def wait_seconds(self, seconds: float) -> None:
@@ -253,10 +292,15 @@ class WarehouseController:
                 return
 
     def get_pose(self) -> tuple[float, float, float]:
-        """Zwraca pozę robota (x, z, theta) z Supervisor API.
+        """Zwraca pozę robota (x, z, theta).
 
-        Rotacja axis-angle wokół osi Y: axis.y < 0 -> kąt ujemny.
+        F1: domyslnie estymata z Localizer (enkodery kol + IMU) -- bez
+        Supervisor ground truth w trakcie ruchu. Fallback do Supervisor API,
+        gdy enkodery niedostepne albo USE_LOCALIZATION=False.
         """
+        if USE_LOCALIZATION and self.localizer is not None \
+                and self.localizer.available:
+            return self.localizer.pose
         node = self.robot.getSelf()
         pos = node.getField("translation").getSFVec3f()
         # Kurs z macierzy orientacji (odporny na pochylenie kadluba):
@@ -319,6 +363,131 @@ class WarehouseController:
                 print(f"[NAV] PRZESZKODA: {name}={value:.0f} > {DS_THRESHOLD}")
                 return True
         return False
+
+    def _announce_fleet_intent(self):
+        """Publish a small snapshot for the other controller in Robot.customData."""
+        if not hasattr(self, "robot_id"):
+            return
+        cell = self.current_cell()
+        goal = self.current_goal_cell
+        if self.state in (State.ALIGN_AND_SCAN, State.VERIFY_ITEM,
+                          State.PICK_ITEM):
+            if self.trip_queue:
+                goal = tuple(self.trip_queue[0].access_cell)
+            else:
+                terminal_cells = self.layout.get("terminal_cells", [[7, 11], [8, 11]])
+                goal = tuple(terminal_cells[0 if self.robot_id == "WarehouseRobot" else 1])
+        snapshot = (cell, goal, self.state)
+        if snapshot == self._fleet_last_announcement:
+            return
+        payload = {"cell": cell, "goal": goal,
+                   "state": self.state}
+        self.robot.getSelf().getField("customData").setSFString(json.dumps(payload))
+        self._fleet_last_announcement = snapshot
+
+    def _other_robot(self):
+        children = self.robot.getRoot().getField("children")
+        for i in range(children.getCount()):
+            node = children.getMFNode(i)
+            if node.getTypeName() != "WarehouseRobot":
+                continue
+            name = node.getField("name").getSFString()
+            if name == self.robot_id:
+                continue
+            try:
+                intent = json.loads(node.getField("customData").getSFString() or "{}")
+            except (ValueError, TypeError):
+                intent = {}
+            return name, node.getPosition(), intent
+        return None
+
+    def _fleet_meeting(self):
+        peer = self._other_robot()
+        if peer is None:
+            return None
+        name, pos, intent = peer
+        if intent.get("state") == State.DONE:
+            return None
+        x, z, theta = self.get_pose()
+        dx, dz = pos[0]-x, pos[2]-z
+        distance = math.hypot(dx, dz)
+        if distance < 0.01 or distance > FLEET_MEETING_DISTANCE:
+            return None
+        forward = -math.sin(theta)*dx-math.cos(theta)*dz
+        lateral = abs(math.cos(theta)*dx-math.sin(theta)*dz)
+        if forward < 0.1 or lateral > 0.8:
+            return None
+        return name, pos, intent
+
+    def _other_robot_orientation(self, name):
+        children = self.robot.getRoot().getField("children")
+        for i in range(children.getCount()):
+            node = children.getMFNode(i)
+            if (node.getTypeName() == "WarehouseRobot"
+                    and node.getField("name").getSFString() == name):
+                return node.getOrientation()
+        return None
+
+    def _fleet_auction(self, peer):
+        """Compare the extra distance each robot would travel to give way."""
+        name, pos, intent = peer
+        other_ori = self._other_robot_orientation(name)
+        if other_ori is not None:
+            _, _, theta = self.get_pose()
+            other_theta = math.atan2(other_ori[2], other_ori[8])
+            if math.cos(theta-other_theta) > 0.4:
+                self.stop_wheels()
+                self.wait_seconds(0.25)
+                return "wait"  # jazda za robotem: poczekaj, bez objazdu
+        their_cell = self.world_to_cell(pos[0], pos[2])
+        their_goal = tuple(intent.get("goal") or their_cell)
+        our_cell = self.current_cell()
+        our_goal = self.current_goal_cell or our_cell
+        blocked = self.static_blocked | self.temp_blocked | self.dynamic_blocked
+        blocked -= {our_cell, their_cell}
+        cols, rows = self.navigator.cols, self.navigator.rows
+        our_bid, refuge, route = refuge_bid(
+            our_cell, our_goal, their_cell, their_goal, blocked, cols, rows)
+        their_bid, _, _ = refuge_bid(
+            their_cell, their_goal, our_cell, our_goal, blocked, cols, rows)
+        chosen = winner(self.robot_id, our_bid, name, their_bid)
+        bid = (our_cell, their_cell, our_goal, their_goal, our_bid,
+               their_bid, chosen)
+        if bid != self._fleet_last_bid:
+            print(f"[FLEET] Licytacja z {name}: komorki {our_cell}/{their_cell}, "
+                  f"cele {our_goal}/{their_goal}, koszt ustapienia "
+                  f"{self.robot_id}={our_bid}, {name}={their_bid}; "
+                  f"jedzie {chosen}.")
+            self._fleet_last_bid = bid
+        if chosen == self.robot_id:
+            self.stop_wheels()
+            self.wait_seconds(0.5)
+            return "wait"
+        if refuge is None:
+            self.stop_wheels()
+            self.wait_seconds(0.5)
+            return "wait"
+        self.fleet_refuge = refuge
+        self.fleet_refuge_path = route
+        self.fleet_peer = name
+        return "yield"
+
+    def _yield_to_refuge(self):
+        """Retreat on a checked route; the peer keeps the contested corridor."""
+        route = self.fleet_refuge_path
+        if not route:
+            return False
+        self.fleet_yielding = True
+        try:
+            print(f"[FLEET] Ustepuje do {self.fleet_refuge}: {route}")
+            arrived = self.follow_path(route)
+        finally:
+            self.fleet_yielding = False
+        if arrived:
+            self.fleet_hold = True
+            self.fleet_hold_time = 0.0
+            self.stop_wheels()
+        return arrived
 
     # ------------------------------------------------------------------
     # Prymitywy ruchu (zamknięta pętla na pozie z Supervisor API)
@@ -409,6 +578,15 @@ class WarehouseController:
                       f"bez postepu, poza=({x:.2f},{z:.2f},{theta:.2f}) -- "
                       "traktuje jak przeszkode")
                 return False
+            if check_obstacles and not self.fleet_yielding:
+                peer = self._fleet_meeting()
+                if peer is not None:
+                    outcome = self._fleet_auction(peer)
+                    if outcome == "yield":
+                        self.stop_wheels()
+                        return False
+                    stall_time = 0.0  # celowo czekamy na przejazd zwyciezcy
+                    continue
             if check_obstacles and self.obstacle_detected():
                 self.stop_wheels()
                 print("[NAV] Wykryto przeszkodę na trasie!")
@@ -471,10 +649,25 @@ class WarehouseController:
         children = self.robot.getRoot().getField("children")
         for i in range(children.getCount()):
             node = children.getMFNode(i)
-            if not node.getDef().startswith("OBSTACLE_"):
+            # drugi robot (flota F8): blokuj jego biezaca komorke, zeby
+            # nie planowac trasy przez niego (kolizje czołowe w alejach)
+            if node.getTypeName() == "WarehouseRobot":
+                name_field = node.getField("name")
+                other = name_field.getSFString() if name_field else ""
+                if other and other != self.robot_id:
+                    pos = node.getPosition()
+                    if 0 <= pos[1] < 2.1:
+                        self.dynamic_blocked.add(
+                            self.world_to_cell(pos[0], pos[2]))
+                continue
+            definition = node.getDef()
+            is_obstacle = definition.startswith("OBSTACLE_")
+            is_dropped_product = definition.startswith("PRODUCT_") and (
+                node.getPosition()[0] >= 1.0 and node.getPosition()[2] >= 5.8)
+            if not (is_obstacle or is_dropped_product):
                 continue
             box = node.getField("boundingObject").getSFNode()
-            if box.getTypeName() != "Box":
+            if box is None or box.getTypeName() != "Box":
                 continue
             size = box.getField("size").getSFVec3f()
             pos, ori = node.getPosition(), node.getOrientation()
@@ -537,7 +730,17 @@ class WarehouseController:
     def follow_path(self, path, goal_is_access=False):
         """Follow cell centers, keeping obstacle detection active on every leg."""
         self.set_lift(LIFT_MIN)
+        preview = " -> ".join(f"({c[0]},{c[1]})" for c in path[:6])
+        self._update_hud(f"trasa: {preview}")
         cells = path
+        if cells:
+            center_x, center_z = self.navigator.cell_to_world(cells[0])
+            x, z, _ = self.get_pose()
+            # Po skanowaniu robot jest w tej samej komorce, lecz przesuniety
+            # w stronę produktu. Powrot do jej srodka tworzy zbedne nawroty.
+            if (self.world_to_cell(x, z) == cells[0]
+                    and math.hypot(center_x-x, center_z-z) < 0.4):
+                cells = cells[1:]
         for cell in cells:
             waypoint_x, waypoint_z = self.navigator.cell_to_world(cell)
             x, z, _ = self.get_pose()
@@ -547,6 +750,9 @@ class WarehouseController:
                 return False
             if not self.drive_to(waypoint_x, waypoint_z):
                 return False
+            # F1: korekta dryfu -- robot stoi w znanym punkcie siatki
+            if self.localizer is not None and self.localizer.available:
+                self.localizer.snap(waypoint_x, waypoint_z)
         return True
 
     def platform_slot_offset(self, slot: int) -> tuple[float, float, float]:
@@ -576,11 +782,44 @@ class WarehouseController:
     # Zmiana stanu FSM z logowaniem
     # ------------------------------------------------------------------
 
+    def _update_hud(self, extra: str = "") -> None:
+        """F6: nakladka statusowa w viewporcie (Supervisor.setLabel).
+
+        Label 0: stan/robot/zamowienie/cel/ladunek/kursy (kolor wg stanu).
+        Label 1: informacja dodatkowa (np. podglad sciezki), gdy podana.
+        """
+        order_id = self.current_order.order_id if self.current_order else "-"
+        target = self.current_target.product_id if self.current_target else "-"
+        color = 0xFFFFFF
+        if self.state == State.AVOID_OBSTACLE:
+            color = 0xFF8800
+        elif self.state in (State.REPORT, State.DONE):
+            color = 0x66FF66
+        text = (f"[{self.robot_id}] {self.state} | zam: {order_id} | "
+                f"cel: {target} | ladunek {self.load_weight:.1f}/50 kg | "
+                f"kursy: {self.trips_done}")
+        # osobne wiersze labeli per robot (F8): robot1 u gory, robot2 nizej --
+        # pionowo, bo dlugie teksty nachodzily na siebie w poziomie
+        base_id = 0 if self.robot_id == "WarehouseRobot" else 2
+        base_y = 0.02 if self.robot_id == "WarehouseRobot" else 0.19
+        try:
+            self.robot.setLabel(base_id, text, 0.01, base_y, 0.065,
+                                color, 0.0)
+            if extra:
+                self.robot.setLabel(base_id + 1, extra, 0.01, base_y + 0.085,
+                                    0.05, 0xFFFF99, 0.0)
+        except Exception:
+            pass
+
     def set_state(self, new_state: str) -> None:
         """Przełącza stan FSM i wypisuje log."""
         if new_state != self.state:
             print(f"[FSM] Stan: {self.state} -> {new_state}")
             self.state = new_state
+            self._update_hud()
+            if new_state == State.DONE and self.navigator is not None:
+                # Kontroler moze zakonczyc petle bez kolejnego step().
+                self._announce_fleet_intent()
 
     # ------------------------------------------------------------------
     # Stany FSM
@@ -613,6 +852,52 @@ class WarehouseController:
                 sensor.enable(self.timestep)
                 self.devices[sensor_name] = sensor
 
+        # F1: IMU (+ GPS dostepny, nieuzywany) i estymator odometryczny
+        imu = self.robot.getDevice("imu")
+        if imu is not None:
+            imu.enable(self.timestep)
+        gps = self.robot.getDevice("gps")
+        if gps is not None:
+            gps.enable(self.timestep)
+        self.localizer = Localizer(self.devices.get("wheel_left_sensor"),
+                                   self.devices.get("wheel_right_sensor"),
+                                   imu=imu, wheel_radius=WHEEL_RADIUS,
+                                   track_width=TRACK_WIDTH)
+        # Kalibracja startowa: jednorazowy odczyt pozy z Supervisor API
+        # (odpowiednik znanej pozycji startowej w realnym magazynie).
+        if self.localizer.available:
+            node = self.robot.getSelf()
+            pos0 = node.getField("translation").getSFVec3f()
+            ori0 = node.getOrientation()
+            self.localizer.start(pos0[0], pos0[2],
+                                 normalize_angle(math.atan2(ori0[2], ori0[8])))
+            print(f"[F1] Lokalizacja odometryczna aktywna "
+                  f"(start: {pos0[0]:.2f}, {pos0[2]:.2f}).")
+        else:
+            print("[F1] Brak enkoderow kola -- poza z Supervisor API.")
+
+        # F8: identyfikator robota z pola name instancji
+        self.robot_id = self.robot.getSelf().getField("name").getSFString()
+        # Przy starcie (lub reload swiata) oba roboty startuja razem --
+        # blokady zamowien z poprzedniej sesji sa osierocone, czyscimy je.
+        # Best effort: na Windows plik moze byc chwilowo zablokowany
+        # (OneDrive/inny proces) -- wtedy zostaje; wygasa po CLAIM_STALE_S.
+        claims_dir = ORDERS_DIR / ".claims"
+        if claims_dir.exists():
+            for stale_lock in claims_dir.glob("*.lock"):
+                try:
+                    stale_lock.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        # F3: Recognition w kamerze (fallback identyfikacji produktu)
+        try:
+            self.devices["camera"].recognitionEnable(self.timestep)
+        except Exception as exc:
+            print(f"[QR] Recognition niedostepne w kamerze: {exc}")
+        with open(PRODUCTS_PATH, encoding="utf-8") as pf:
+            self.products_db = {p["id"]: p for p in json.load(pf)["products"]}
+
         self.devices["lift_motor"].setPosition(LIFT_MIN)
         self.set_gripper(False)
 
@@ -624,7 +909,8 @@ class WarehouseController:
         self.navigator = Navigator(str(LAYOUT_PATH))
         self.scanner = QRScanner(self.devices["camera"])
         self.order_manager = OrderManager(str(ORDERS_DIR), str(PRODUCTS_PATH),
-                                          str(REPORTS_DIR))
+                                          str(REPORTS_DIR),
+                                          robot_id=self.robot_id)
 
         print("[FSM] Inicjalizacja zakończona — robot gotowy do pracy.")
         self.set_state(State.LOAD_ORDER)
@@ -710,6 +996,14 @@ class WarehouseController:
     def _state_avoid_obstacle(self):
         """Remember the obstruction before backing up; never erase a blocked goal."""
         self.stop_wheels()
+        if self.fleet_refuge is not None:
+            reached = self._yield_to_refuge()
+            self.fleet_refuge = None
+            self.fleet_refuge_path = []
+            self._wait_for_path(self.resume_navigation_state)
+            if not reached:
+                print("[FLEET] Dojazd do mijanki nieudany; czekam na droge.")
+            return
         self.avoid_attempts += 1
         if self.avoid_attempts > MAX_AVOID_ATTEMPTS:
             self._wait_for_path(self.resume_navigation_state)
@@ -741,11 +1035,60 @@ class WarehouseController:
         self.set_state(State.WAIT_FOR_PATH)
 
     def _state_wait_for_path(self):
+        """WAIT_FOR_PATH z eskalacja: po WAIT_TIMEOUT_S oczekiwania na cel
+        produktu pozycja jest odkladana (kolejne proby w nastepnych kursach);
+        po MAX_ITEM_DEFERS odlozeniach pozycja dostaje status niedostepna
+        (flaga red). Powroty do terminala nie eskaluja (cel musi sie
+        zwolnic)."""
         self.stop_wheels()
         self.wait_seconds(2.0)
+        if self.fleet_hold:
+            self.fleet_hold_time += 2.0
+            peer = self._other_robot()
+            if peer is not None:
+                pos = peer[1]
+                x, z, _ = self.get_pose()
+                if (math.hypot(pos[0]-x, pos[2]-z) < FLEET_CLEAR_DISTANCE
+                        and self.fleet_hold_time < WAIT_TIMEOUT_S):
+                    return
+            self.fleet_hold = False
+        self.wait_time += 2.0
         if self.compute_path(self.current_cell(), self.current_goal_cell):
             print("[NAV] Droga ponownie dostepna; wznawiam jazde.")
+            self.wait_time = 0.0
             self.set_state(self.resume_navigation_state)
+            return
+        if self.wait_time >= WAIT_TIMEOUT_S and \
+                self.resume_navigation_state == State.RETURN_TO_TERMINAL:
+            # Terminal zajety: najpierw druga komorka, potem zatrzymanie z ladunkiem
+            if not self.terminal_alternate_tried:
+                alt = self._alternate_terminal_cell()
+                if alt is not None:
+                    print(f"[NAV] Komórka {self.current_goal_cell} zajęta — "
+                          f"próbuję komórkę {alt}.")
+                    self.current_goal_cell = alt
+                    self.terminal_alternate_tried = True
+                    self.wait_time = 0.0
+                    self.set_state(State.RETURN_TO_TERMINAL)
+                    return
+            print("[NAV] Terminal niedostępny — zatrzymuję robota z ładunkiem.")
+            self._emergency_unload()
+            return
+        if self.wait_time >= WAIT_TIMEOUT_S and                 self.resume_navigation_state == State.NAVIGATE and                 self.current_target is not None:
+            item = self.current_target
+            count = self.defer_counts.get(item.product_id, 0) + 1
+            self.defer_counts[item.product_id] = count
+            self.wait_time = 0.0
+            if count >= MAX_ITEM_DEFERS:
+                print(f"[NAV] Cel {self.current_goal_cell} trwale zajety — "
+                      f"pozycja {item.product_id} oznaczona jako niedostepna.")
+                self.order_manager.mark_unreachable(item)
+            else:
+                print(f"[NAV] Cel {self.current_goal_cell} zajety — pozycja "
+                      f"{item.product_id} odlozona (proba "
+                      f"{count}/{MAX_ITEM_DEFERS}).")
+            self.current_target = None
+            self.set_state(State.NAVIGATE)
 
     def _state_align_and_scan(self) -> None:
         """ALIGN_AND_SCAN: podnosnik na poziom, orientacja na regał, skan QR."""
@@ -802,6 +1145,15 @@ class WarehouseController:
             except ValueError:
                 print(f"[QR] Nieprawidłowy format payloadu: "
                       f"'{self.scan_payload}'.")
+
+        if found_id is None:
+            # F3: fallback -- identyfikacja przez Recognition kamery
+            fallback = recognition_fallback(self.devices["camera"],
+                                            item.position, self.products_db)
+            if fallback is not None:
+                found_id, found_weight = fallback
+                print(f"[QR] Fallback Recognition: zidentyfikowano "
+                      f"{found_id} (waga katalogowa {found_weight} kg).")
 
         if found_id is None:
             print("[QR] Kod QR nieodczytany — produkt oznaczony jako "
@@ -876,13 +1228,15 @@ class WarehouseController:
             self.set_state(State.RETURN_TO_TERMINAL)
 
     def _state_return_to_terminal(self) -> None:
-        """RETURN_TO_TERMINAL: powrót do najbliższej komórki terminala."""
+        """RETURN_TO_TERMINAL: kazdy robot ma wlasne miejsce rozladunku."""
         terminal_cells = [tuple(c) for c in
                           self.layout.get("terminal_cells", [[7, 11], [8, 11]])]
         start = self.current_cell()
-        goal = min(terminal_cells,
-                   key=lambda cell: abs(cell[0] - start[0])
-                   + abs(cell[1] - start[1]))
+        goal = terminal_cells[0] if self.robot_id == "WarehouseRobot" else terminal_cells[1]
+        if self.terminal_alternate_tried:
+            others = [c for c in terminal_cells if c != goal]
+            if others:
+                goal = others[0]
         self.current_goal_cell = goal
         print(f"[NAV] Powrót do terminala — cel: komórka {goal}.")
         path = self.compute_path(start, goal)
@@ -896,14 +1250,52 @@ class WarehouseController:
         else:
             self.set_state(State.AVOID_OBSTACLE)
 
+    def _alternate_terminal_cell(self):
+        """Use the other bay only when its owner has vacated the terminal."""
+        terminal_cells = [tuple(c) for c in
+                          self.layout.get("terminal_cells", [[7, 11], [8, 11]])]
+        peer = self._other_robot()
+        for cell in terminal_cells:
+            if cell == self.current_goal_cell:
+                continue
+            if peer is not None:
+                pos = peer[1]
+                x, z = self.navigator.cell_to_world(cell)
+                if math.hypot(pos[0]-x, pos[2]-z) < 1.2:
+                    continue
+                if tuple(peer[2].get("goal") or ()) == cell:
+                    continue
+            if self.compute_path(self.current_cell(), cell):
+                return cell
+        return None
+
+    def _emergency_unload(self) -> None:
+        """Stop with cargo on board when every terminal route remains blocked."""
+        print("[FSM] AWARIA: terminal niedostepny; ladunek pozostaje na robocie.")
+        self.unload_failed = True
+        for entry in self.carried:
+            self.order_manager.mark_unreachable(
+                entry["item"], "terminal zablokowany — ladunek na robocie")
+        if self.current_order is not None:
+            for item in self.current_order.items:
+                if item.status == "pending":
+                    self.order_manager.mark_unreachable(
+                        item, "terminal zablokowany — ladunek na robocie")
+        self.set_state(State.REPORT)
+
     def _state_unload(self) -> None:
         """UNLOAD: zrzut noszonych produktów w strefie terminala."""
+        self.terminal_alternate_tried = False
         if self.carried:
             print(f"[FSM] Rozładunek {len(self.carried)} produktów "
                   "w strefie terminala.")
-        for index, entry in enumerate(self.carried):
-            drop_x = DROP_ZONE_X
-            drop_z = DROP_ZONE_Z0 + DROP_ZONE_DZ * index
+        for entry in self.carried:
+            n = self.drop_index
+            self.drop_index += 1
+            lane_x = DROP_GRID_X0 + (0.0 if self.robot_id == "WarehouseRobot"
+                                     else DROP_GRID_DX * DROP_GRID_COLS + 0.6)
+            drop_x = lane_x + DROP_GRID_DX * (n % DROP_GRID_COLS)
+            drop_z = DROP_GRID_Z0 + DROP_GRID_DZ * (n // DROP_GRID_COLS)
             node = entry["node"]
             node.getField("translation").setSFVec3f(
                 [drop_x, DROP_ZONE_Y, drop_z])
@@ -937,7 +1329,7 @@ class WarehouseController:
               f"flaga: {report['flag']}, kursy: {report['trips']}.")
         print(f"[RAPORT] Raport zapisany: {path}")
         self.current_order = None
-        self.set_state(State.LOAD_ORDER)
+        self.set_state(State.DONE if self.unload_failed else State.LOAD_ORDER)
 
     def _state_done(self) -> None:
         """DONE: zatrzymanie robota i zakończenie pracy kontrolera."""

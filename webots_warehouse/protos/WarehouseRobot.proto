@@ -48,6 +48,7 @@
 #   │       └── SliderJoint (os -X, 0-0.05 m) — LinearMotor "gripper_right"
 #   │             palce startowo na x=±0.20 (swiatlo 0.38 m); dodatnia pozycja
 #   │             OBU silnikow domyka chwytak do swiatla ~0.28 m (paczka)
+#   ├── IMU "imu" (srodek korpusu, y=0.20) i GPS "gps" (gora korpusu, y=0.42)
 #   └── 5 x DistanceSensor (type "generic", lookupTable 0-1.5 m):
 #         ds_front_left, ds_front_right (przod, -Z), ds_left (-X),
 #         ds_right (+X), ds_back (tyl, +Z)
@@ -60,6 +61,8 @@
 #   gripper_left, gripper_right — LinearMotor, pozycja 0-0.05 m
 #                             (0 = otwarty 0.38 m, 0.05 = domkniety ~0.28 m)
 #   camera                  — Camera 640x480, fieldOfView 1.0, na glowicy
+#   imu                     — InertialUnit, srodek korpusu (y=0.20)
+#   gps                     — GPS, gora korpusu (y=0.42)
 #   ds_front_left, ds_front_right, ds_left, ds_right, ds_back — DistanceSensor
 #                             (generic, lookupTable [0->1023 ... 1.5->0])
 #
@@ -75,6 +78,7 @@ PROTO WarehouseRobot [
   field SFRotation rotation     0 1 0 0                  # 0 1 0 0 = przod na -Z (polnoc)
   field SFString   name         "WarehouseRobot"         # nazwa instancji robota
   field SFString   controller   "warehouse_controller"   # kontroler FSM kompletacji
+  field SFString   customData   ""                       # zamiar ruchu dla drugiego robota
 ]
 {
   Robot {
@@ -84,6 +88,7 @@ PROTO WarehouseRobot [
     model "WarehouseRobot"
     description "Mobilny robot magazynowy do kompletacji zamowien (QR, FSM, raporty JSON)"
     controller IS controller
+    customData IS customData
     supervisor TRUE
     children [
       # ---- korpus glowny (wizualizacja) ----
@@ -301,6 +306,8 @@ PROTO WarehouseRobot [
               width 640
               height 480
               fieldOfView 1.0
+              recognition Recognition {
+              }
             }
             # ---- palec lewy chwytaka (os +X: dodatnia pozycja = domykanie) ----
             SliderJoint {
@@ -382,6 +389,16 @@ PROTO WarehouseRobot [
             mass 1.4
           }
         }
+      }
+      # ---- IMU (jednostka inercyjna) na srodku korpusu ----
+      InertialUnit {
+        translation 0 0.20 0          # srodek bryly korpusu
+        name "imu"
+      }
+      # ---- GPS na gorze korpusu ----
+      GPS {
+        translation 0 0.42 0          # ponad platforma odkladcza (y=0.37)
+        name "gps"
       }
       # ---- czujniki odleglosci (generic, zakres uzyteczny 0-1.5 m) ----
       DistanceSensor {

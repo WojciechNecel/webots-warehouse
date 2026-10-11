@@ -4,27 +4,32 @@ PLIK: webots_warehouse/docs/architecture.md
 
 PRZEZNACZENIE:
     Dokument architektury projektu "Symulacyjny system obsługi zamówień
-    magazynowych w Webots". Opisuje rolę każdego pliku projektu, maszynę
-    stanów FSM kontrolera, konwencje współrzędnych i siatki nawigacyjnej,
-    schematy wszystkich plików JSON (z przykładami), API publiczne modułów
-    Pythona, model robota i jego urządzenia, mechanizm podziału zamówienia
-    na kursy (limit 50 kg) oraz format komunikatów błędów w raportach.
+    magazynowych w Webots". Opisuje rolę każdego pliku projektu, generator
+    świata, maszynę stanów FSM kontrolera, konwencje współrzędnych i siatki
+    nawigacyjnej, schematy wszystkich plików JSON (z przykładami), API
+    publiczne modułów Pythona, model robota i jego urządzenia, mechanizm
+    podziału zamówienia na kursy (limit 50 kg), format komunikatów błędów
+    w raportach oraz diagnostykę (logs/, telemetria [TEL]).
 
 SPOSÓB UŻYCIA:
     Dokument referencyjny dla deweloperów i recenzentów. Wszystkie nazwy
     własne (DEF-e, nazwy urządzeń, sygnatury funkcji, komunikaty) są
     SZTYWNYM kontraktem integracyjnym — zmiana któregokolwiek elementu
     wymaga spójnej zmiany we wszystkich plikach projektu.
+    UWAGA: worlds/warehouse.wbt jest GENEROWANY przez tools/generate_world.py
+    — wnioski o strukturze świata weryfikuj w generatorze, nie w pliku .wbt.
 
 STRUKTURA DOKUMENTU:
     1. Przegląd plików projektu
-    2. Konwencje współrzędnych i siatka nawigacyjna
-    3. Model robota i urządzenia
-    4. Maszyna stanów FSM (diagram ASCII)
-    5. API modułów Pythona
-    6. Schematy JSON z przykładami
-    7. Mechanizm split-order (limit 50 kg)
-    8. Format komunikatów błędów
+    2. Generowanie świata (tools/generate_world.py)
+    3. Konwencje współrzędnych i siatka nawigacyjna
+    4. Model robota i urządzenia
+    5. Maszyna stanów FSM (diagram ASCII)
+    6. Logowanie i diagnostyka (logs/, telemetria [TEL])
+    7. API modułów Pythona
+    8. Schematy JSON z przykładami
+    9. Mechanizm split-order (limit 50 kg)
+    10. Format komunikatów błędów
 ================================================================================
 -->
 
@@ -34,19 +39,22 @@ STRUKTURA DOKUMENTU:
 
 | Plik | Rola |
 |------|------|
-| `worlds/warehouse.wbt` | Świat symulacji Webots R2025a: hala 18×14 m (`RectangleArena`), 60 regałów (`SHELF_c_r`), 19 boxów produktów (`PRODUCT_<id>`), terminal (`TERMINAL`), 3 przeszkody dynamiczne (`OBSTACLE_1..3`), oświetlenie bez cieni (12× `PointLight` z kwadratowym tłumieniem), instancja robota z `WarehouseRobot.proto`, robot-pomost `MCP_BRIDGE`. Węzły `TexturedBackground` / `TexturedBackgroundLight` / `RectangleArena` deklarowane przez `EXTERNPROTO` (wymóg od R2023b+). **Plik generowany — nie edytować ręcznie.** `WorldInfo.basicTimeStep = 32`. |
-| `protos/WarehouseRobot.proto` | Definicja PROTO robota: napęd różnicowy (2 koła r = 0.08 m na `HingeJoint` + `RotationalMotor`), podnosnik z `LinearMotor`, chwytak dwupalcy, kamera, 5 czujników odległości, platforma odkładcza 0.5×0.5 m. Pole `supervisor = TRUE`. |
+| `worlds/warehouse.wbt` | Świat symulacji Webots R2025a: hala 18×14 m jako **jawne statyczne Solidy** (podłoga `FLOOR` + 4 ściany `WALL_N/S/E/W` — nie `RectangleArena`, patrz §2), 60 regałów (`SHELF_c_r`), 19 boxów produktów (`PRODUCT_<id>`), strefa terminala (`TERMINAL_ZONE`) + kiosk (`TERMINAL`), 3 przeszkody dynamiczne (`OBSTACLE_1..3`), oświetlenie bez cieni (`DirectionalLight` + 12× `PointLight` z kwadratowym tłumieniem), instancja robota z `WarehouseRobot.proto`, robot-pomost `MCP_BRIDGE`. `WorldInfo`: `basicTimeStep 32`, `coordinateSystem "NUE"`, `contactProperties` tire/floor i body/floor z `softCFM 0.001`. **Plik generowany przez `tools/generate_world.py` — nie edytować ręcznie.** |
+| `protos/WarehouseRobot.proto` | Definicja PROTO robota: napęd różnicowy (2 koła r = 0.08 m na `HingeJoint` + `RotationalMotor`, z markerami na obręczach i `PositionSensor`ami), podnosnik z `LinearMotor`, chwytak dwupalcy na `LinearMotor`ach, kamera na głowicy, 5 czujników odległości, platforma odkładcza 0.5×0.5 m. Pole `supervisor = TRUE`. Szczegóły: §4. |
 | `textures/qr/P001.png … P020.png, P999.png` | Tekstury kodów QR 512×512 px (potęga dwójki — wymóg Webots) naklejone na boxy produktów. `P999.png` to kod "złego produktu" umieszczony na półce P020. |
 | `data/warehouse_layout.json` | Geometria magazynu: siatka, origin, komórki zablokowane, terminal, start robota, wysokości poziomów, sloty, reguła dostępu, limity wagowe. |
 | `data/products.json` | Katalog 20 produktów: pozycja, waga, payload QR, komórka dostępu, flagi anomalii (`present`, `world_qr`). |
 | `orders/order_01..03.json` | Zamówienia testowe ORD-001, ORD-002, ORD-003. |
 | `reports/` | Katalog tworzony w runtime; kontroler zapisuje tu `report_<order_id>.json`. |
+| `logs/` | Katalog diagnostyczny tworzony w runtime: `fsm_debug.log` (cały stdout/stderr kontrolera, patrz §6), zdjęcia `scan_<id>_<próba>.png` zapisywane przy każdej próbie skanu QR, artefakty pomocnicze (`axis_verification.json`, zrzuty *.jpg). |
 | `tools/generate_assets.py` | Generator tekstur QR (`qrcode` + `pillow`, 512×512 px) i plików danych spójnych z kontraktem. |
-| `tools/generate_world.py` | Generator świata `worlds/warehouse.wbt` z `data/*.json` — źródło prawdy o strukturze świata; odtwarza plik po przypadkowym nadpisaniu przez Webots. |
+| `tools/generate_world.py` | Generator świata `worlds/warehouse.wbt` z `data/*.json` — źródło prawdy o strukturze świata; odtwarza plik po przypadkowym nadpisaniu przez Webots. Patrz §2. |
 | `tools/validate_project.py` | Walidator spójności: świat ↔ `products.json` ↔ zamówienia ↔ tekstury. |
-| `controllers/mcp_bridge/` | Kontroler-pomost MCP (z repo [webotMCP](https://github.com/MHasaan/webotMCP)): supervisor wystawiający symulację po TCP (porty 10022/10023) dla serwera MCP. |
+| `tools/test_obstacle_navigation.py` | Testy regresyjne nawigacji (unittest, mock `Supervisor`): zablokowane cele, objazdy, WAIT_FOR_PATH. |
+| `tools/_patch_camera.py` | Latka narzędziowa (jednorazowa): pozycja kamery poza zasięgiem palców, sztywniejsze kontakty, logi watchdog. Zachowana dla historii zmian modelu. |
+| `controllers/mcp_bridge/` | Kontroler-pomost MCP (z repo [webotMCP](https://github.com/MHasaan/webotMCP)): supervisor wystawiający symulację po TCP (porty 10022/10023) dla serwera MCP. W świecie instancja `DEF MCP_BRIDGE Robot { supervisor TRUE }`. |
 | `controllers/mcp_robot/` | Generyczny kontroler-agent MCP, doczepiany do dowolnego robota (opcjonalny, z repo webotMCP). |
-| `controllers/warehouse_controller/warehouse_controller.py` | Główny kontroler robota — maszyna stanów FSM, zamknięta pętla nawigacji po Supervisor API, pobieranie/rozładunek kinematyczny. |
+| `controllers/warehouse_controller/warehouse_controller.py` | Główny kontroler robota — maszyna stanów FSM, zamknięta pętla nawigacji po Supervisor API, pobieranie/rozładunek kinematyczny. Przy starcie przekierowuje stdout/stderr do `logs/fsm_debug.log`. |
 | `controllers/warehouse_controller/navigation.py` | Siatka nawigacyjna, konwersja współrzędnych, A* (4 kierunki), planowanie kursów z limitem 50 kg. |
 | `controllers/warehouse_controller/qr_scanner.py` | Odczyt kodu QR z obrazu kamery Webots przez `cv2.QRCodeDetector`; parser payloadu. |
 | `controllers/warehouse_controller/order_manager.py` | Wczytywanie zamówień, statusowanie pozycji, budowa i zapis raportów JSON. |
@@ -54,16 +62,59 @@ STRUKTURA DOKUMENTU:
 Korzeń projektu z poziomu kontrolerów:
 `Path(__file__).resolve().parents[2]`.
 
-## 2. Konwencje współrzędnych i siatka nawigacyjna
+## 2. Generowanie świata (`tools/generate_world.py`)
 
-### 2.1 Układ współrzędnych Webots
+`worlds/warehouse.wbt` **nie jest edytowany ręcznie** — jest w całości
+generowany skryptem `tools/generate_world.py` z danych `data/warehouse_layout.json`
+i `data/products.json`. Generator przed zapisem tworzy kopię
+`worlds/warehouse.wbt.bak`. Uruchomienie:
 
-- Podłoga = płaszczyzna **XZ**, oś **Y w górę**.
-- Hala: `RectangleArena` o `floorSize` 18×14 m, ściany wysokości 2.5 m.
+```
+python tools/generate_world.py
+```
+
+Kluczowe decyzje konstrukcyjne generatora (źródło: kod skryptu):
+
+- **Układ współrzędnych NUE.** `WorldInfo` deklaruje jawnie
+  `coordinateSystem "NUE"` (podłoga = płaszczyzna XZ, oś Y w górę). Bez tej
+  deklaracji R2025a przyjąłby domyślne ENU (Z w górę) i geometria magazynu
+  "ległaby na boku". `WorldInfo.gravity` jest od R2023a skalarem (SFFloat).
+- **Podłoga i ściany jako jawne Solidy.** `RectangleArena` z EXTERNPROTO nie
+  dawała czynnego `boundingObject` — obiekty dynamiczne przelatywały przez
+  podłogę. Dlatego hala to: `DEF FLOOR Solid` (box 18×0.02×14 m na
+  y = −0.01, `contactMaterial "floor"`) oraz cztery ściany `DEF WALL_N/S/E/W`
+  (wysokość 2.5 m, `locked TRUE`). **`RectangleArena` nie występuje w świecie.**
+- **Właściwości kontaktów.** `WorldInfo.contactProperties` definiuje dwie pary
+  materiałów: `tire`↔`floor` (`coulombFriction 2.5`) i `body`↔`floor`
+  (`coulombFriction 0.05`), obie z `softCFM 0.001` (stabilizacja kontaktów —
+  koła trzymają podłoże, korpus i ślizgi mogą się ślizgać). Robot deklaruje
+  `contactMaterial "tire"` (koła) i `"body"` (korpus).
+- **EXTERNPROTO** tylko dla `TexturedBackground`, `TexturedBackgroundLight`
+  (adresy R2025a) i lokalnego `../protos/WarehouseRobot.proto`; deklaracje
+  muszą być na początku pliku, przed węzłami.
+- **Regały** (`DEF SHELF_<c>_<r>`): 4 słupki narożne + 3 półki, statyczne
+  (`locked TRUE`); `boundingObject` obejmuje tylko słupki i półki, więc
+  produkty stojące na półkach nie kolidują z regałem.
+- **Produkty** (`DEF PRODUCT_<id>`): box 0.25 m z fizyką, `mass = waga`,
+  tekstura QR; P005 jest celowo pomijany (scenariusz `missing`), a box na
+  miejscu P020 nosi teksturę `P999.png` (scenariusz `wrong_product`).
+- **Oświetlenie bezcieniowe** (warunek czytelności QR): `DirectionalLight`
+  z `castShadows FALSE` + 12× `PointLight` (`attenuation 0 0 1` — kwadratowe
+  tłumienie, `radius 7`, wysokość 2.7 m, nad alejami).
+- Wszystkie węzły `Solid` mają unikalne pola `name` (Webots ostrzega o
+  duplikatach domyślnej nazwy "solid").
+
+## 3. Konwencje współrzędnych i siatka nawigacyjna
+
+### 3.1 Układ współrzędnych Webots
+
+- Podłoga = płaszczyzna **XZ**, oś **Y w górę** (`coordinateSystem "NUE"`).
+- Hala: podłoga 18×14 m + ściany wysokości 2.5 m jako jawne statyczne Solidy
+  (`FLOOR`, `WALL_N/S/E/W`) — patrz §2.
 - Rotacje axis-angle wokół osi Y; dodatni kąt = obrót przeciwnie do wskazówek
   zegara patrząc z góry (zgodnie z regułą prawej dłoni dla +Y).
 
-### 2.2 Siatka nawigacyjna
+### 3.2 Siatka nawigacyjna
 
 - **16 kolumn × 12 rzędów**, komórka kwadratowa **1.0 m**.
 - Środek komórki `(c, r)` w świecie:
@@ -75,68 +126,100 @@ Korzeń projektu z poziomu kontrolerów:
 
 - Komórka `[0,0]` to południowo-zachodni (−X, −Z) narożnik siatki.
 
-### 2.3 Regały i komórki dostępu
+### 3.3 Regały i komórki dostępu
 
 - **Komórki regałów (zablokowane dla nawigacji):** rzędy
   `r ∈ {2, 3, 5, 6, 8, 9}` × kolumny `c ∈ {2, 3, 4, 5, 6, 9, 10, 11, 12, 13}`
   — łącznie 60 regałów, DEF `SHELF_c_r`.
-- Regał: bryła 0.9 × 1.8 × 0.9 m (X × Y × Z), 3 poziomy półek.
+- Regał: obrys 0.9 × 0.9 m (X × Z), wysokość 1.8 m, 3 poziomy półek
+  (konstrukcyjnie: 4 słupki + 3 półki, patrz §2).
 - **Wysokości środków produktów:** `levels = [0.2, 0.8, 1.4]` m.
 - **Sloty na poziomie:** 2 sztuki, offset `±0.25` m wzdłuż osi X.
 - **Reguła dostępu (access cell)** — komórka, na której staje robot:
 
-  | Rzęd regału | Komórka dostępu | Orientacja robota |
+  | Rząd regału | Komórka dostępu | Orientacja robota |
   |-------------|-----------------|-------------------|
   | `r ∈ {2, 5, 8}` (rząd "północny" pary) | `(c, r − 1)` | przód na południe (+Z) |
   | `r ∈ {3, 6, 9}` (rząd "południowy" pary) | `(c, r + 1)` | przód na północ (−Z) |
 
   Tekstura QR znajduje się na ścianie produktu zwróconej do alei dostępu.
 
-### 2.4 Terminal i start robota
+### 3.4 Terminal i start robota
 
 - Terminal: komórki `[[7,11], [8,11]]`, środek strefy `(0.0, 5.5)`,
-  zielony patch 2×2 m na podłodze + kiosk DEF `TERMINAL`.
-- Start robota: komórka `[7,11]` → pozycja `(−0.5, 0, 5.5)`,
-  rotacja `0 1 0 0` — przód robota na północ (−Z).
+  zielony patch 2×2 m na podłodze (`TERMINAL_ZONE`) + kiosk DEF `TERMINAL`
+  przy południowej ścianie (`(0, 0, 6.6)`).
+- Start robota: komórka `[7,11]` → pozycja `(−0.5, 0.01, 5.5)` (lekki uniesiony
+  spoczynek na podłodze), rotacja `0 1 0 0` — przód robota na północ (−Z).
 
-### 2.5 Przeszkody dynamiczne
+### 3.5 Przeszkody dynamiczne
 
 Trzy kostki 0.4 m z fizyką (DEF `OBSTACLE_1`, `OBSTACLE_2`, `OBSTACLE_3`)
 na alejach, na pozycjach `(0.5, −1.5)`, `(−4.5, 1.5)`, `(2.5, 4.5)`.
-Kontroler **nie zna** ich pozycji — wykrywa je wyłącznie czujnikami
-odległości (stan `AVOID_OBSTACLE`).
 
-### 2.6 Orientacja robota i heading
+Kontroler obsługuje je **dwukanałowo**:
+
+1. **Prewencja (planowanie):** przy każdym planowaniu ścieżki
+   (`compute_path`) kontroler odczytuje przez Supervisor API bieżące pozycje
+   wszystkich węzłów `OBSTACLE_*` i oznacza jako zablokowane komórki siatki
+   pod ich rzutem, **z marginesem 0.60 m** na palce chwytaka i promień obrotu.
+   Przeszkody są więc znane planistowi *w chwili planowania*, ale nie są
+   wpisane w statyczną mapę — przesunięcie kostki w trakcie symulacji jest
+   uwzględniane przy kolejnym przeplanowaniu.
+2. **Reakcja (czujniki):** jeśli mimo to robot najedzie na przeszkodę
+   (np. kostka przesunięta podczas jazdy danego legu), przednie czujniki
+   odległości wyzwalają stan `AVOID_OBSTACLE` (patrz §5).
+
+### 3.6 Orientacja robota i heading
 
 - **Lokalny przód robota = −Z.** Dodatnia prędkość obu kół = jazda do przodu.
-- Heading z pola `rotation` (axis-angle wokół Y): jeśli `axis.y < 0`,
-  kąt przyjmuje się ze znakiem przeciwnym (`kąt = −kąt`).
+- Heading jest odczytywany z **macierzy orientacji** (`node.getOrientation()`),
+  nie z pola `rotation`: `theta = atan2(ori[2], ori[8])` — jest to odporne
+  na pochylenie kadłuba (dynamika kontaktów).
 - Wektor przodu w świecie: `(−sin θ, 0, −cos θ)`; `θ = 0` → przód na −Z
   (północ).
 
-## 3. Model robota i urządzenia
+## 4. Model robota i urządzenia
 
 Zdefiniowany w `protos/WarehouseRobot.proto`; instancja w świecie:
 
 ```
 WarehouseRobot {
-  translation -0.5 0 5.5
+  translation -0.5 0.01 5.5
   rotation 0 1 0 0
   controller "warehouse_controller"
 }
 ```
 
 - Początek układu PROTO na poziomie podłogi (`y = 0` = kontakt kół
-  z podłożem); masa robota ~30 kg.
-- Napęd różnicowy: 2 koła o promieniu 0.08 m na `HingeJoint` +
-  `RotationalMotor`; stabilność zapewniają wpusty/ślizgi w bryle korpusu.
-- Podnosnik z kamerą na głowicy: `LinearMotor`, zakres 0–1.6 m. Kamera jest
-  zamontowana na wysokości `0.2 + lift`, więc poziom `L` wymaga
-  `lift = levels[L] − 0.2`.
-- Platforma odkładcza na korpusie 0.5×0.5 m — **limit logiczny 50 kg**
-  (wymuszany przez kontroler, nie przez fizykę). Sloty platformy
-  dla kolejnych produktów: offsety `(±0.15, 0.45 + 0.3·k, ±0.15)` w układzie
-  robota (k = indeks produktu na platformie).
+  z podłożem); masa robota ~30 kg (korpus 24 + koła 2×2 + głowica 1.4
+  + palce 2×0.25).
+- Korpus zwężony do 0.5×0.3×0.7 m (X×Y×Z) — obrót w alei 1.0 m bez kontaktu
+  z regałami; `contactMaterial "body"`.
+- Napęd różnicowy: 2 koła (Cylinder r = 0.08 m, szer. 0.05 m) na `HingeJoint`
+  (oś `−1 0 0`, kotwice x = ±0.27 m) + `RotationalMotor`
+  (maxVelocity 12 rad/s); **na każdym kole biały marker na obręczy**
+  (rotacja widoczna na nagraniach) oraz **`PositionSensor`**
+  (`wheel_left_sensor` / `wheel_right_sensor`) używany przez kontroler do
+  diagnostyki napędu w telemetrii `[TEL]`. Koła mają `contactMaterial "tire"`.
+- Stabilność: dwa ślizgi (kulki r = 0.025 m, przód/tył) wpisane w
+  `boundingObject` korpusu.
+- Podnosnik (winda): `SliderJoint` oś +Y + `LinearMotor`, zakres 0–1.6 m.
+  Głowica (`lift_head`) jest **cofnięta względem środka korpusu
+  (z = −0.15 m)** — wysunięta nad stronę regałową (przód = −Z).
+- Kamera na głowicy: **optyka na wysokości `0.25 + lift`**, więc poziom `L`
+  regału wymaga `lift = levels[L] − 0.25`. Kamera ma rotację
+  `−1 1 1 2.094…` rad, która obraca oś optyczną kamery (+X) na lokalne **−Z**
+  (przód robota), a górę obrazu na +Y. Jest przesunięta poza zasięg palców
+  (z = −0.24 w układzie głowicy).
+- Chwytak: dwa **smukłe palce** (box 0.02×0.10×0.10 m) na `SliderJoint`ach
+  (osi ±X) z `LinearMotor`ami, pozycja 0–0.05 m; startowo na x = ±0.20 m
+  (światło 0.38 m), domknięcie zwęża światło do ~0.28 m (paczka 0.25 m).
+- Platforma odkładcza na korpusie 0.5×0.5 m (y = 0.36, przesunięta o
+  z = +0.12 m) — **limit logiczny 50 kg** (wymuszany przez kontroler, nie
+  przez fizykę). Sloty dla kolejnych produktów w lokalnym układzie robota:
+  `(±0.15, 0.50 + 0.3·k, ±0.15)` — znak x zmienia się co slot, znak z co dwa
+  sloty (k = indeks produktu na platformie).
 - Maksymalna waga pojedynczej paczki: 20 kg (`max_package_weight_kg`).
 
 ### Nazwy urządzeń (kontrakt SZTYWNY)
@@ -145,37 +228,47 @@ WarehouseRobot {
 |-------|-----|---------------|
 | `wheel_left` | RotationalMotor | lewe koło napędowe |
 | `wheel_right` | RotationalMotor | prawe koło napędowe |
+| `wheel_left_sensor` | PositionSensor | położenie lewego koła (telemetria `[TEL]`) |
+| `wheel_right_sensor` | PositionSensor | położenie prawego koła (telemetria `[TEL]`) |
 | `lift_motor` | LinearMotor | podnosnik głowicy z kamerą (0–1.6 m) |
-| `gripper_left` | RotationalMotor | lewy palec chwytaka |
-| `gripper_right` | RotationalMotor | prawy palec chwytaka |
-| `camera` | Camera | 640×480 px, fov 1.0 rad, na głowicy, patrzy na lokalne −Z |
+| `gripper_left` | LinearMotor | lewy palec chwytaka (oś +X, 0–0.05 m) |
+| `gripper_right` | LinearMotor | prawy palec chwytaka (oś −X, 0–0.05 m) |
+| `camera` | Camera | 640×480 px, fov 1.0 rad, na głowicy; patrzy na lokalne −Z po rotacji `−1 1 1 2.094` (oś optyczna +X → −Z) |
 | `ds_front_left` | DistanceSensor | przód-lewo (wykrywanie przeszkód) |
 | `ds_front_right` | DistanceSensor | przód-prawo (wykrywanie przeszkód) |
-| `ds_left` | DistanceSensor | bok lewy |
-| `ds_right` | DistanceSensor | bok prawy |
+| `ds_left` | DistanceSensor | bok lewy (nie bierze udziału w wykrywaniu — patrz §5) |
+| `ds_right` | DistanceSensor | bok prawy (nie bierze udziału w wykrywaniu — patrz §5) |
 | `ds_back` | DistanceSensor | tył (bezpieczeństwo cofania) |
 
+Czujniki odległości: typ `generic`, `lookupTable [0→1023 … 1.5→0]`
+(odczyt rośnie, gdy przeszkoda jest bliżej).
+
 Robot ma pole `supervisor TRUE`, więc kontroler importuje
-`from controller import Robot, Supervisor` i pracuje na instancji
+`from controller import Supervisor` i pracuje na instancji
 `Supervisor` — umożliwia to odczyt pozy
-(`getSelf().getField("translation" / "rotation")`) oraz kinematyczne
+(`getSelf().getField("translation")` + `getSelf().getOrientation()`),
+skanowanie pozycji przeszkód `OBSTACLE_*` oraz kinematyczne
 przenoszenie produktów (ustawianie ich pól `translation`).
 
 ### Oświetlenie świata
 
 `TexturedBackground` + `TexturedBackgroundLight`, `DirectionalLight`
-z `castShadows FALSE` oraz kilka `PointLight`. Jasne, równomierne
-oświetlenie bez cieni jest warunkiem czytelności kodów QR
-(eliminuje błędy `cv2.QRCodeDetector` wynikające z kontrastu i cieni).
+z `castShadows FALSE` oraz 12 `PointLight` nad alejami (`attenuation 0 0 1`,
+`radius 7`, y = 2.7 m). Jasne, równomierne oświetlenie bez cieni jest
+warunkiem czytelności kodów QR (eliminuje błędy `cv2.QRCodeDetector`
+wynikające z kontrastu i cieni).
 
-## 4. Maszyna stanów FSM
+## 5. Maszyna stanów FSM
 
 Kontroler `warehouse_controller.py` jest maszyną stanów o stanach:
 
-`INIT, LOAD_ORDER, PLAN_TRIP, NAVIGATE, AVOID_OBSTACLE, ALIGN_AND_SCAN,
-VERIFY_ITEM, PICK_ITEM, RETURN_TO_TERMINAL, UNLOAD, REPORT, DONE`
+`INIT, LOAD_ORDER, PLAN_TRIP, NAVIGATE, AVOID_OBSTACLE, WAIT_FOR_PATH,
+ALIGN_AND_SCAN, VERIFY_ITEM, PICK_ITEM, RETURN_TO_TERMINAL, UNLOAD,
+REPORT, DONE`
 
-Przejścia są logowane po polsku, np. `[FSM] Stan: NAVIGATE`.
+Przejścia są logowane po polsku w formacie ze strzałką, np.
+`[FSM] Stan: NAVIGATE -> ALIGN_AND_SCAN` (cały log trafia do
+`logs/fsm_debug.log` — patrz §6).
 
 ```
                     ┌──────────┐
@@ -196,19 +289,19 @@ Przejścia są logowane po polsku, np. `[FSM] Stan: NAVIGATE`.
         │  │            ▼              ┌────────────────────┐   │
         │  │  ┌────────────────────┐  │  AVOID_OBSTACLE    │   │
         │  │  │   ALIGN_AND_SCAN   │  │ stop, cofnij 0.3m, │   │
-        │  │  │ lift → poziom,     │  │ zablokuj komórkę,  │   │
-        │  │  │ skan QR (3 próby)  │  │ przeplanuj ścieżkę │   │
+        │  │  │ lift → poziom,     │  │ zablokuj komórkę   │   │
+        │  │  │ skan QR (3 próby)  │  │ (15 s), przeplanuj │   │
         │  │  └─────────┬──────────┘  └─────────┬──────────┘   │
         │  │            ▼                       │              │
-        │  │  ┌────────────────────┐            │              │
-        │  │  │    VERIFY_ITEM     │            │              │
-        │  │  └─┬───────┬───────┬──┘            │              │
-        │  │    │ok     │wrong  │missing        │              │
-        │  │    ▼       │       │               │              │
-        │  │ ┌────────┐ │       │               │              │
-        │  └─┤PICK_ITEM◄┤       │               │              │
+        │  │  ┌────────────────────┐   brak trasy / >8 prób    │
+        │  │  │    VERIFY_ITEM     │            ▼              │
+        │  │  └─┬───────┬───────┬──┘  ┌────────────────────┐   │
+        │  │    │ok     │wrong  │miss │   WAIT_FOR_PATH    │   │
+        │  │    ▼       │       │     │ czekaj 2 s, sprawdź│   │
+        │  │ ┌────────┐ │       │     │ trasę ponownie     │   │
+        │  └─┤PICK_ITEM◄┤       │     └─────────┬──────────┘   │
         │    └───┬────┘ │       │               │              │
-        │        │      ▼       ▼               │              │
+        │        │      ▼       ▼               ▼              │
         │        │   (pozycja oznaczona wrong_product/missing  │
         │        │    — pomijamy, jedziemy do następnego celu) │
         │        │                                            │
@@ -237,30 +330,104 @@ Przejścia są logowane po polsku, np. `[FSM] Stan: NAVIGATE`.
 
 Uwagi do stanów:
 
-- **NAVIGATE** — ruch w zamkniętej pętli po pozie z Supervisor API; obrót
-  w miejscu do kierunku kolejnego waypointa, potem jazda prosto. Ścieżka
-  pochodzi z `Navigator.find_path` (A*, 4 kierunki).
-- **AVOID_OBSTACLE** — wyzwalany, gdy `ds_front_left` / `ds_front_right` /
-  `ds_left` / `ds_right` przekroczą próg; po cofnięciu 0.3 m komórka przed
-  robotem jest oznaczana jako chwilowo zablokowana i ścieżka jest
-  przeplanowywana; następnie powrót do `NAVIGATE`.
-- **ALIGN_AND_SCAN** — podnosnik ustawiany na `lift = levels[L] − 0.2`;
-  skan QR z maks. 3 próbami.
+- **NAVIGATE** — ruch w zamkniętej pętli po pozie z Supervisor API. Ścieżka
+  pochodzi z lokalnego A* (`compute_path`, 4 kierunki; blokuje komórki
+  regałów, komórki chwilowo zablokowane i komórki pod przeszkodami
+  `OBSTACLE_*` — patrz §3.5). Dla każdego legu (odcinka do kolejnego
+  waypointa) robot najpierw wykonuje **obrót w miejscu** (`rotate_to`) do
+  azymutu waypointa, dopiero potem jedzie prosto (`drive_to`). W trakcie
+  jazdy działa korekcja kursu (`HEADING_GAIN`), a gdy błąd kursu przekroczy
+  0.6 rad, robot zatrzymuje się i wykonuje **re-align** (ponowny obrót
+  w miejscu, log `[NAV] Re-align: ...`). `drive_to` ma parametr
+  `check_obstacles` (domyślnie `True`) pozwalający wyłączyć wykrywanie
+  przeszkód na odcinku; obecnie wszystkie wywołania używają wartości
+  domyślnej, a fałszywe alarmy od regału docelowego eliminuje strojenie
+  progu czujników (patrz AVOID_OBSTACLE).
+- **Watchdogi 5 s** — `rotate_to`, `drive_to` i `backup` przerywają ruch,
+  gdy przez 5 s czasu symulacji nie ma postępu (błąd kąta / dystans nie
+  maleje); zdarzenie jest logowane (`[NAV] WATCHDOG ...`) i traktowane jak
+  przeszkoda (powrót `False` → `AVOID_OBSTACLE`). To mechanizm odzyskiwania
+  po fizycznym unieruchomieniu lub poślizgu.
+- **AVOID_OBSTACLE** — wyzwalany, gdy **`ds_front_left` lub
+  `ds_front_right`** przekroczą próg `DS_THRESHOLD = 900` (≈ 0.18 m; próg jest
+  poniżej luzu bocznego w alei ~0.25 m → odczyt ~853 i dystansu do produktu
+  w komórce dostępu ~0.48 m → odczyt ~700). Czujniki boczne `ds_left` /
+  `ds_right` są **wyłączone z wykrywania** — najmniejszy dryf z osi alei
+  fałszywie je wyzwalał. Po cofnięciu 0.3 m (`backup`, pilnowany przez
+  `ds_back`) komórka przed robotem (sonda 0.6 m) jest oznaczana jako chwilowo
+  zablokowana **na 15 s** i ścieżka jest przeplanowywana; po **8**
+  nieudanych próbach (`MAX_AVOID_ATTEMPTS`) następuje przejście do
+  `WAIT_FOR_PATH`.
+- **WAIT_FOR_PATH** — robot stoi z zatrzymanymi silnikami i co 2 s sprawdza,
+  czy cel lub dojazd się zwolniły (blokady chwilowe wygasają); po zwolnieniu
+  wraca do stanu wznowienia (`NAVIGATE` lub `RETURN_TO_TERMINAL`).
+- **ALIGN_AND_SCAN** — najpierw podnosnik na dół i (jeśli trzeba) dojazd do
+  punktu `(x slotu produktu, z komórki dostępu)`, potem obrót na regał
+  (`r ∈ {2,5,8}` → θ = π, przód +Z; `r ∈ {3,6,9}` → θ = 0, przód −Z);
+  podnosnik ustawiany na `lift = levels[L] − 0.25` (wysokość optyki kamery to
+  `0.25 + lift`); skan QR z maks. 3 próbami, przy każdej próbie zdjęcie
+  z kamery jest zapisywane do `logs/scan_<id>_<próba>.png`.
 - **VERIFY_ITEM** — porównanie payloadu QR z zamówieniem: identyfikator
-  i waga. Statusy pozycji: `ok`, `wrong_product`, `missing`.
+  i waga (tolerancja 0.05 kg). Brak węzła `PRODUCT_<id>` w świecie →
+  `missing`; kod nieodczytany po 3 próbach → `wrong_product` ze znalezionym
+  id `NIEODCZYTANY`; niezgodne id lub waga → `wrong_product` (produkt zostaje
+  na półce). Statusy pozycji: `ok`, `wrong_product`, `missing`.
 - **PICK_ITEM** — zamknięcie chwytaka, kinematyczne przypięcie produktu
-  do slotu platformy (Supervisor co krok ustawia `translation` produktu
-  względem pozy robota), zwolnienie chwytaka. Jeżeli kolejny produkt
-  z planu przekroczyłby 50 kg ładunku, następuje wcześniejsze
-  `RETURN_TO_TERMINAL` → `UNLOAD` i kontynuacja tego samego zamówienia.
-- **UNLOAD** — teleport noszonych produktów do rządka przy strefie terminala
-  (okolice `(0.5, 5.0 ± …)`), wyzerowanie ładunku.
+  do slotu platformy: pola `physics` i `boundingObject` produktu są
+  **usuwane** (zapamiętane jako tekst), a Supervisor co krok ustawia jego
+  `translation`/`rotation` względem pozy robota — noszony box nie koliduje
+  z robotem. Jeżeli kolejny produkt z planu przekroczyłby 50 kg ładunku,
+  następuje wcześniejsze `RETURN_TO_TERMINAL` → `UNLOAD` i kontynuacja tego
+  samego zamówienia (log `[WAGA] ...`).
+- **RETURN_TO_TERMINAL** — roboty mają odrębne komórki rozładunku `(7,11)`
+  i `(8,11)`. Cel drugiego robota pozostaje przeszkodą dynamiczną dla planisty.
+- **UNLOAD** — produkty trafiają do siatki za pasem dojazdu: pierwszy rząd
+  ma `z=6.40`, drugi `z=6.70`, a roboty używają osobnych zakresów `x`.
+  Przy odkładaniu pola `boundingObject` i `physics` są przywracane i wywoływane
+  jest `resetPhysics()`. Jeśli żadna komórka terminala nie jest dostępna,
+  robot zachowuje ładunek, kończy raportem błędu i zatrzymuje się.
 
-## 5. API modułów Pythona
+Roboty publikują bieżącą komórkę, stan i następny cel w `customData` PROTO.
+Cel kolejnej paczki jest dostępny już podczas skanowania i pobrania. Przy
+spotkaniu `fleet_traffic.py` oblicza koszt ustąpienia dla obu robotów;
+miejsce mijanki leży poza całą trasą robota, który otrzymał pierwszeństwo.
+Nawigacja pomija powrót do środka tej samej komórki po podjechaniu do półki.
+
+## 6. Logowanie i diagnostyka (`logs/`)
+
+### 6.1 `logs/fsm_debug.log`
+
+Blok `__main__` kontrolera tworzy katalog `logs/` i **przekierowuje stdout
+i stderr do `logs/fsm_debug.log`** (tryb dopisywania, buforowanie liniowe).
+Konsekwencja: logi kontrolera **nie pojawiają się w konsoli Webots** —
+analizę przebiegu prowadzi się na tym pliku.
+
+Konwencje pliku:
+
+- Nowy przebieg zaczyna się bannerem `===== START KONTROLERA =====`.
+- Przejścia FSM: `[FSM] Stan: <STARY> -> <NOWY>`.
+- Prefiksy modułów: `[FSM]` stany, `[NAV]` nawigacja i watchdogi,
+  `[QR]` skanowanie, `[WAGA]` limit udźwigu, `[RAPORT]` raporty,
+  `[CHWYTAK]` / `[PODNOSNIK]` efektory.
+- **Telemetria `[TEL]`** — wypisywana przez `drive_to` co 32 kroki
+  symulacji (~1 s przy `basicTimeStep 32`):
+  `[TEL] cel=(x,z) poza=(x,z) theta=… dist=… kolkoL/R+=…/… rad`,
+  gdzie `kolkoL/R+` to przyrost położenia kół od początku legu
+  (z `wheel_left_sensor` / `wheel_right_sensor`) — pozwala odróżnić
+  poślizg kół od unieruchomienia robota.
+
+### 6.2 Pozostałe artefakty
+
+- `logs/scan_<id>_<próba>.png` — zdjęcie z kamery przy każdej próbie skanu
+  QR (debugowanie ALIGN_AND_SCAN).
+- `logs/axis_verification.json`, `logs/obstacles_before_pick_test.json`,
+  `logs/*.jpg` — artefakty z sesji kalibracyjnych modelu robota.
+
+## 7. API modułów Pythona
 
 Sygnatury są SZTYWNE — kontroler główny jest kodowany przeciwko nim.
 
-### 5.1 `navigation.py`
+### 7.1 `navigation.py`
 
 ```python
 class Navigator:
@@ -279,7 +446,7 @@ class Navigator:
         # — kolejność celów minimalizuje dystans
 ```
 
-### 5.2 `qr_scanner.py`
+### 7.2 `qr_scanner.py`
 
 ```python
 class QRScanner:
@@ -293,7 +460,7 @@ def parse_payload(payload: str) -> tuple[str, float]
     # "P001;3.5" -> ("P001", 3.5); ValueError przy złym formacie
 ```
 
-### 5.3 `order_manager.py`
+### 7.3 `order_manager.py`
 
 ```python
 class OrderItem:
@@ -316,9 +483,9 @@ class OrderManager:
     def save_report(self, report: dict) -> str   # zwraca ścieżkę pliku
 ```
 
-## 6. Schematy JSON z przykładami
+## 8. Schematy JSON z przykładami
 
-### 6.1 `data/warehouse_layout.json`
+### 8.1 `data/warehouse_layout.json`
 
 ```json
 {
@@ -340,7 +507,7 @@ class OrderManager:
 }
 ```
 
-### 6.2 `data/products.json`
+### 8.2 `data/products.json`
 
 Format pozycji światowej: `x = −7.5 + c + slot`, `z = −5.5 + r`,
 `y = levels[level]`. Payload QR: `<id>;<waga>`. DEF w świecie:
@@ -398,7 +565,7 @@ Format pozycji światowej: `x = −7.5 + c + slot`, `z = −5.5 + r`,
 - `world_qr` (P020) — fizyczny box `PRODUCT_P020` nosi teksturę `P999.png`
   z payloadem `P999;6.0` (test statusu `wrong_product`).
 
-### 6.3 Tabela produktów (pełna)
+### 8.3 Tabela produktów (pełna)
 
 | id | cell | level | slot | waga [kg] | Uwagi |
 |----|------|-------|------|-----------|-------|
@@ -423,7 +590,7 @@ Format pozycji światowej: `x = −7.5 + c + slot`, `z = −5.5 + r`,
 | P019 | [2,9]  | 1 | −0.25 | 7.5  | |
 | P020 | [13,9] | 0 | −0.25 | 16.0 | **world_qr=`P999;6.0` — zły produkt na półce** |
 
-### 6.4 `orders/order_XX.json`
+### 8.4 `orders/order_XX.json`
 
 ```json
 {
@@ -445,14 +612,14 @@ Zamówienia testowe:
 - **ORD-003** — czerwone: P002, P005 (brak na półce), P020 (na półce box
   z kodem P999), P019.
 
-### 6.5 `reports/report_<order_id>.json`
+### 8.5 `reports/report_<order_id>.json`
 
 ```json
 {
   "order_id": "ORD-001",
   "flag": "green",
   "trips": 1,
-  "timestamp": "2024-05-17T14:32:05.123456",
+  "timestamp": "2026-10-11T22:27:13.487220",
   "items": [
     {
       "product_id": "P001",
@@ -461,7 +628,13 @@ Zamówienia testowe:
       "message": "pobrano pomyślnie"
     }
   ],
-  "logs": ["[FSM] Stan: INIT", "[FSM] Stan: LOAD_ORDER", "…"]
+  "logs": [
+    "Wczytano zamówienie ORD-001 (4 pozycji).",
+    "P015: pobrano pomyślnie.",
+    "P007: pobrano pomyślnie.",
+    "P011: pobrano pomyślnie.",
+    "P001: pobrano pomyślnie."
+  ]
 }
 ```
 
@@ -469,9 +642,13 @@ Zamówienia testowe:
   `"red"` gdy cokolwiek ≠ `ok`.
 - `trips`: liczba kursów (powrotów do terminala z towarem).
 - `timestamp`: znacznik czasu w formacie ISO.
-- `logs`: logi kontrolera z przebiegu zamówienia.
+- `logs`: **wewnętrzne logi `OrderManager`** z przebiegu zamówienia
+  (komunikaty wczytania i statusowania pozycji, w kolejności zdarzeń —
+  kolejność pobierania może się różnić od kolejności w `items`).
+  Pełny log FSM (przejścia stanów, `[NAV]`, `[QR]`, telemetria `[TEL]`)
+  znajduje się w `logs/fsm_debug.log`, **nie** w raporcie.
 
-## 7. Mechanizm split-order (limit 50 kg)
+## 9. Mechanizm split-order (limit 50 kg)
 
 Platforma odkładcza ma limit logiczny **50 kg**. Podział zamówienia na kursy
 działa na dwóch poziomach:
@@ -483,17 +660,19 @@ działa na dwóch poziomach:
    kurs i otwiera kolejny. Wynik: lista kursów
    `[{"items": [...], "targets": [(c, r), ...], "total_weight": float}]`
    o minimalizowanym dystansie.
-2. **Weryfikacja w runtime (kontroler).** Przed każdym `PICK_ITEM`
-   kontroler sprawdza, czy `ładunek + waga_produktu > 50 kg`. Jeśli tak
-   (np. gdy zeskanowana waga różni się od planowanej), przerywa objazd:
-   `RETURN_TO_TERMINAL` → `UNLOAD` → kontynuacja **tego samego zamówienia**
-   od przerwanej pozycji.
+2. **Weryfikacja w runtime (kontroler).** Przed każdym pobraniem kolejnej
+   pozycji (w `NAVIGATE`) kontroler sprawdza, czy
+   `ładunek + waga_produktu > 50 kg`. Jeśli tak (np. gdy zeskanowana waga
+   różni się od planowanej), przerywa objazd: `RETURN_TO_TERMINAL` →
+   `UNLOAD` → kontynuacja **tego samego zamówienia** od przerwanej pozycji
+   (log `[WAGA] Pobranie <id> przekroczyłoby limit ...`).
 
 Przykład: ORD-002 (85 kg: 12.0 + 9.5 + 15.0 + 11.0 + 14.0 + 10.5 + 13.0)
 nie mieści się w jednym kursie — planista dzieli je na co najmniej 2 kursy,
-każdy ≤ 50 kg, a raport odnotowuje `"trips": 2`.
+każdy ≤ 50 kg, a raport odnotowuje `"trips": 2` (potwierdzone:
+`reports/report_ORD-002.json`).
 
-## 8. Format komunikatów błędów
+## 10. Format komunikatów błędów
 
 Komunikaty w raporcie są SZTYWNE (testy porównują je tekstowo):
 
@@ -502,12 +681,14 @@ Komunikaty w raporcie są SZTYWNE (testy porównują je tekstowo):
 | `ok` | `pobrano pomyślnie` |
 | `wrong_product` (złe id na półce) | `Błąd lokalizacji [X] - znaleziono [Y] zamiast [Z]` |
 | `wrong_product` (zgodne id, zła waga) | `Błąd wagi [X] - oczekiwano [A] kg, jest [B] kg` |
+| `wrong_product` (kod nieodczytany po 3 próbach) | `Błąd lokalizacji [X] - znaleziono NIEODCZYTANY zamiast [Z]` |
 | `missing` | `brak produktu` |
 
 Gdzie:
 
 - `[X]` — lokalizacja półki, np. `regał [13,9] poziom 0`;
-- `[Y]` — identyfikator znaleziony w kodzie QR (np. `P999`);
+- `[Y]` — identyfikator znaleziony w kodzie QR (np. `P999`); gdy kodu nie
+  udało się odczytać, kontroler przekazuje `NIEODCZYTANY`;
 - `[Z]` — identyfikator oczekiwany (np. `P020`);
 - `[A]` / `[B]` — waga oczekiwana / zeskanowana w kilogramach.
 
@@ -520,3 +701,15 @@ Błąd wagi regał [2,2] poziom 0 - oczekiwano 3.5 kg, jest 6.0 kg
 
 Flaga zamówienia: `green` tylko gdy wszystkie pozycje `ok`; w każdym innym
 przypadku `red` (braki, złe produkty, złe wagi).
+
+## Powiązane pliki
+
+- [test_scenarios.md](test_scenarios.md) — scenariusze testowe z oczekiwanymi
+  raportami i uwagami z zarejestrowanych przebiegów
+- [../tools/generate_world.py](../tools/generate_world.py) — generator świata
+  (źródło prawdy o `worlds/warehouse.wbt`)
+- [../protos/WarehouseRobot.proto](../protos/WarehouseRobot.proto) — model robota
+- [../controllers/warehouse_controller/warehouse_controller.py](../controllers/warehouse_controller/warehouse_controller.py) — kontroler FSM
+- [../logs/fsm_debug.log](../logs/fsm_debug.log) — zarejestrowane przebiegi
+  kontrolera (dowody zachowania)
+- [../reports/](../reports/) — wygenerowane raporty zamówień
