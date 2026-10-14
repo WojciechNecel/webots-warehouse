@@ -297,5 +297,15 @@
   ],
   "access_rule": "r in {2,5,8} -> (c,r-1); r in {3,6,9} -> (c,r+1)",
   "max_platform_load_kg": 50,
-  "max_package_weight_kg": 20
+  "max_package_weight_kg": 20,
+  "charging_cells": [
+    [
+      15,
+      11
+    ],
+    [
+      0,
+      11
+    ]
+  ]
 }

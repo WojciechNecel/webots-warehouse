@@ -94,6 +94,7 @@ from navigation import Navigator
 from qr_scanner import QRScanner, parse_payload, recognition_fallback
 from order_manager import OrderManager
 from localization import Localizer
+from battery_model import Battery, BatteryEmpty
 from fleet_traffic import refuge_bid, winner
 
 
@@ -197,6 +198,9 @@ class State:
     RETURN_TO_TERMINAL = "RETURN_TO_TERMINAL"
     UNLOAD = "UNLOAD"
     REPORT = "REPORT"
+    GO_CHARGE = "GO_CHARGE"
+    CHARGING = "CHARGING"
+    BATTERY_EMPTY = "BATTERY_EMPTY"
     DONE = "DONE"
 
 
@@ -262,6 +266,7 @@ class WarehouseController:
         self._fleet_last_announcement = None
         self._fleet_last_bid = None
         self.finished = False             # flaga zakończenia pracy (stan DONE)
+        self._lift_pos = 0.0            # biezaca pozycja podnosnika (do animacji)
 
         # F1: estymator pozy z czujnikow pokladowych (enkodery kol + IMU)
         self.localizer: Localizer | None = None
@@ -269,6 +274,13 @@ class WarehouseController:
         self.robot_id = "WarehouseRobot"
         # F3: katalog wag produktow (do fallbacku Recognition)
         self.products_db: dict = {}
+        self.battery = None
+        self.charge_resume_state = State.LOAD_ORDER
+        self.charge_cell = None
+        self.charge_cycles = 0
+        self._battery_hud_at = 0.0
+        self._battery_fields = None
+        self._charger_light = None
 
     # ------------------------------------------------------------------
     # Narzędzia kroku symulacji i pozy robota
@@ -281,6 +293,7 @@ class WarehouseController:
         if self.localizer is not None:
             self.localizer.update()
         self._update_carried()
+        self._update_energy()
         self._announce_fleet_intent()
         return True
 
@@ -335,6 +348,7 @@ class WarehouseController:
     def set_lift(self, position: float) -> None:
         """Ustawia podnosnik na zadanej wysokości [m] (zakres 0-1.6)."""
         position = min(max(position, LIFT_MIN), LIFT_MAX)
+        self._lift_pos = position
         self.devices["lift_motor"].setPosition(position)
         self.wait_seconds(LIFT_SETTLE_TIME)
 
@@ -791,13 +805,18 @@ class WarehouseController:
         order_id = self.current_order.order_id if self.current_order else "-"
         target = self.current_target.product_id if self.current_target else "-"
         color = 0xFFFFFF
-        if self.state == State.AVOID_OBSTACLE:
+        if self.state == State.CHARGING:
+            color = 0x55DDFF
+        elif self.battery and self.battery.level < self.battery.low:
+            color = 0xFFAA44
+        elif self.state == State.AVOID_OBSTACLE:
             color = 0xFF8800
         elif self.state in (State.REPORT, State.DONE):
             color = 0x66FF66
         text = (f"[{self.robot_id}] {self.state} | zam: {order_id} | "
                 f"cel: {target} | ladunek {self.load_weight:.1f}/50 kg | "
-                f"kursy: {self.trips_done}")
+                f"kursy: {self.trips_done}"
+                + (f" | bateria {self.battery.level:.0f}%" if self.battery else ""))
         # osobne wiersze labeli per robot (F8): robot1 u gory, robot2 nizej --
         # pionowo, bo dlugie teksty nachodzily na siebie w poziomie
         base_id = 0 if self.robot_id == "WarehouseRobot" else 2
@@ -898,6 +917,10 @@ class WarehouseController:
         with open(PRODUCTS_PATH, encoding="utf-8") as pf:
             self.products_db = {p["id"]: p for p in json.load(pf)["products"]}
 
+        # Przegub wysuwu ramienia (animacja pobrania)
+        self.devices["reach_motor"] = self.robot.getDevice("reach_motor")
+        self.devices["reach_motor"].setPosition(0.0)
+
         self.devices["lift_motor"].setPosition(LIFT_MIN)
         self.set_gripper(False)
 
@@ -912,6 +935,14 @@ class WarehouseController:
                                           str(REPORTS_DIR),
                                           robot_id=self.robot_id)
 
+        me = self.robot.getSelf()
+        self._battery_fields = (me.getField("batteryLevel"), me.getField("batteryColor"))
+        self.battery = Battery(level=self._battery_fields[0].getSFFloat())
+        index = 0 if self.robot_id == "WarehouseRobot" else 1
+        self.charge_cell = tuple(self.layout.get("charging_cells", [[15, 11], [0, 11]])[index])
+        light = self.robot.getFromDef(f"CHARGER_LED_{index + 1}")
+        self._charger_light = light
+        print(f"[BATERIA] {self.robot_id}: {self.battery.level:.0f}%, stacja {self.charge_cell}.")
         print("[FSM] Inicjalizacja zakończona — robot gotowy do pracy.")
         self.set_state(State.LOAD_ORDER)
 
@@ -1023,7 +1054,8 @@ class WarehouseController:
         print(f"[NAV] Trasa alternatywna: {path}")
         if self.follow_path(path):
             self.avoid_attempts = 0
-            next_state = (State.UNLOAD if self.resume_navigation_state == State.RETURN_TO_TERMINAL
+            next_state = (State.GO_CHARGE if self.resume_navigation_state == State.GO_CHARGE
+                          else State.UNLOAD if self.resume_navigation_state == State.RETURN_TO_TERMINAL
                           else State.ALIGN_AND_SCAN)
             self.set_state(next_state)
 
@@ -1192,11 +1224,60 @@ class WarehouseController:
         node = self.verify_node
 
         print(f"[CHWYTAK] Zamykam chwytak na produkcie {item.product_id}.")
-        self.set_gripper(True)
 
-        slot = len(self.carried)
-        # Transport is kinematic in this project: carried boxes must not
-        # collide with the robot while their pose is set every step.
+        # Extend only the telescopic fingers, retract the parcel, lower, stow.
+        self.stop_wheels()
+        start_pos = list(node.getPosition())
+        translation = node.getField("translation")
+        reach = self.devices.get("reach_motor")
+        lift_start = self._lift_pos
+        lift_clear = min(LIFT_MAX, lift_start + 0.06)
+        clearance = lift_clear - lift_start
+        # Heavier parcels move more deliberately (weight is metadata).
+        pace = 1.0 + 0.3 * min(max(item.expected_weight, 0.0) / 20.0, 1.0)
+
+        def animate(duration, update, loaded=True):
+            steps = max(1, math.ceil(duration * (pace if loaded else 1.0) * 1000 / self.timestep))
+            for k in range(1, steps + 1):
+                t = k / steps
+                # Quintic easing: zero velocity and acceleration at both ends.
+                s = t * t * t * (10.0 + t * (-15.0 + 6.0 * t))
+                update(s)
+                if not self.step():
+                    return False
+            return True
+
+        robot_node = self.robot.getSelf()
+        rail_translation = robot_node.getField("telescopeTranslation")
+        rail_scale = robot_node.getField("telescopeScale")
+        if rail_translation is None or rail_scale is None:
+            raise RuntimeError("Reload world: telescopic gripper PROTO required")
+        # Measure from the actual chassis, not wheel odometry after a contact.
+        body = robot_node.getPosition()
+        orientation = robot_node.getOrientation()
+        forward_x, forward_z = -orientation[2], -orientation[8]
+        distance = ((start_pos[0] - body[0]) * forward_x
+                    + (start_pos[2] - body[2]) * forward_z)
+        extension = max(0.0, distance - 0.48)
+        if extension > 0.85:
+            print("[CHWYTAK] Paczka poza zasiegiem lap; ponowne ustawienie.")
+            self.set_state(State.ALIGN_AND_SCAN)
+            return
+        # Match the parcel centre even on the lowest shelf (lift is clamped).
+        vertical_offset = start_pos[1] - (body[1] + 0.25 + lift_start)
+
+        def set_extension(value):
+            rail_translation.setSFVec3f([0.0, vertical_offset, -value / 2.0])
+            rail_scale.setSFVec3f([1.0, 1.0, (0.30 + value) / 0.30])
+
+        # The old reach joint moved the entire lift into the shelf.
+        if reach is not None:
+            reach.setPosition(0.0)
+        self.set_gripper(False)
+        if not animate(1.3, lambda s: set_extension(extension * s), loaded=False):
+            return
+
+        # Take ownership before closing so contact cannot push the chassis.
         saved_fields = {}
         for field_name in ("physics", "boundingObject"):
             field = node.getField(field_name)
@@ -1204,6 +1285,48 @@ class WarehouseController:
             if value is not None:
                 saved_fields[field_name] = value.exportString()
                 field.removeSF()
+        self.set_gripper(True)
+
+        def lift_box(s):
+            self.devices["lift_motor"].setPosition(lift_start + clearance * s)
+            translation.setSFVec3f(
+                [start_pos[0], start_pos[1] + clearance * s, start_pos[2]])
+
+        if not animate(0.55, lift_box):
+            return
+        self._lift_pos = lift_clear
+        lifted = [start_pos[0], start_pos[1] + clearance, start_pos[2]]
+        retracted = [lifted[0] - extension * forward_x, lifted[1],
+                     lifted[2] - extension * forward_z]
+
+        def retract(s):
+            set_extension(extension * (1.0 - s))
+            translation.setSFVec3f(
+                [a + (b - a) * s for a, b in zip(lifted, retracted)])
+
+        if not animate(1.5, retract):
+            return
+        # Descend only after the parcel and both fingers clear the shelf.
+        # Stop at a low carrying height so the parcel stays above the floor.
+        lower_lift = min(lift_clear, max(LIFT_MIN, 0.20 - vertical_offset))
+        drop = lift_clear - lower_lift
+
+        def lower(s):
+            self.devices["lift_motor"].setPosition(lift_clear - drop * s)
+            translation.setSFVec3f(
+                [retracted[0], retracted[1] - drop * s, retracted[2]])
+
+        if not animate(max(0.65, drop / 0.3), lower):
+            return
+        self._lift_pos = lower_lift
+        # Let the lowered parcel settle visibly before the rear handoff.
+        if not animate(0.7, lambda s: None, loaded=False):
+            return
+        self.set_gripper(False)
+        # Intentional handoff to the rear platform after lowering.
+        rail_translation.setSFVec3f([0.0, 0.0, 0.0])
+
+        slot = len(self.carried)
         self.carried.append({"item": item, "node": node, "slot": slot,
                              "saved_fields": saved_fields})
         self.load_weight += item.expected_weight
@@ -1331,10 +1454,141 @@ class WarehouseController:
         self.current_order = None
         self.set_state(State.DONE if self.unload_failed else State.LOAD_ORDER)
 
-    def _state_done(self) -> None:
-        """DONE: zatrzymanie robota i zakończenie pracy kontrolera."""
+    def _dock_contact(self):
+        if self.charge_cell is None:
+            return False
+        x, z = self.navigator.cell_to_world(self.charge_cell)
+        pos = self.robot.getSelf().getPosition()
+        ori = self.robot.getSelf().getOrientation()
+        heading = math.atan2(ori[2], ori[8])
+        return (math.hypot(pos[0] - x, pos[2] - z) < 0.20
+                and abs(normalize_angle(heading - math.pi)) < 0.12)
+
+    def _update_energy(self):
+        if self.battery is None:
+            return
+        level_field, color_field = self._battery_fields
+        # Public PROTO field also permits deliberate low-battery demo scenarios.
+        self.battery.level = max(0.0, min(100.0, level_field.getSFFloat()))
+        speed = sum(abs(self.devices[k].getVelocity())
+                    for k in ("wheel_left", "wheel_right")) / 2.0
+        docked = self.state == State.CHARGING and speed < 0.01 and self._dock_contact()
+        handling = self.state in (State.ALIGN_AND_SCAN, State.PICK_ITEM, State.UNLOAD)
+        self.battery.update(self.timestep / 1000.0, speed, self.load_weight,
+                            handling, docked)
+        level_field.setSFFloat(self.battery.level)
+        now = self.robot.getTime()
+        if now >= self._battery_hud_at:
+            color = ([0.05, 0.7, 1.0] if docked else
+                     [1.0, 0.15, 0.05] if self.battery.level < self.battery.low else
+                     [0.2, 0.9, 0.3])
+            color_field.setSFColor(color)
+            if self._charger_light:
+                light_color = [0.05, 0.7, 1.0] if docked else [0.1, 0.9, 0.4]
+                self._charger_light.getField("baseColor").setSFColor(light_color)
+                self._charger_light.getField("emissiveColor").setSFColor(light_color)
+            self._update_hud()
+            self._battery_hud_at = now + 0.5
+        if self.battery.level <= 0.0 and self.state != State.BATTERY_EMPTY and not docked:
+            self.stop_wheels()
+            for name in ("lift_motor", "reach_motor", "gripper_left", "gripper_right"):
+                self.devices[name].setVelocity(0.0)
+            raise BatteryEmpty("Brak energii — robot zatrzymany")
+
+    def _request_charge(self, resume):
+        self.charge_resume_state = resume
         self.stop_wheels()
-        print("[FSM] Wszystkie zamówienia zrealizowane — koniec pracy.")
+        self.set_lift(LIFT_MIN)
+        self.current_goal_cell = self.charge_cell
+        self.resume_navigation_state = State.GO_CHARGE
+        self.avoid_attempts = 0
+        print(f"[BATERIA] {self.robot_id}: {self.battery.level:.1f}% — jade do ladowarki.")
+        self.set_state(State.GO_CHARGE)
+
+    def _maybe_charge(self):
+        if self.battery is None:
+            return
+        resume = self.state
+        if resume == State.WAIT_FOR_PATH:
+            resume = self.resume_navigation_state
+        if resume not in (State.NAVIGATE, State.RETURN_TO_TERMINAL,
+                          State.LOAD_ORDER, State.PLAN_TRIP):
+            return
+        goal = self.current_cell()
+        if resume == State.NAVIGATE:
+            item = self.current_target or (self.trip_queue[0] if self.trip_queue else None)
+            if item is not None:
+                goal = tuple(item.access_cell)
+        elif resume == State.RETURN_TO_TERMINAL:
+            index = 0 if self.robot_id == "WarehouseRobot" else 1
+            goal = tuple(self.layout["terminal_cells"][index])
+        legs = [(self.current_cell(), goal), (goal, self.charge_cell)]
+        distance = 0
+        for start, end in legs:
+            route = self.compute_path(start, end)
+            distance += (len(route) - 1 if route else
+                         2 * (abs(start[0] - end[0]) + abs(start[1] - end[1])))
+        if self.battery.needs_charge(distance):
+            self._request_charge(resume)
+
+    def _state_go_charge(self):
+        self.current_goal_cell = self.charge_cell
+        self.resume_navigation_state = State.GO_CHARGE
+        path = self.compute_path(self.current_cell(), self.charge_cell)
+        if not path:
+            self._wait_for_path(State.GO_CHARGE)
+            return
+        if not self.follow_path(path):
+            self.set_state(State.AVOID_OBSTACLE)
+            return
+        dock_x, dock_z = self.navigator.cell_to_world(self.charge_cell)
+        x, z, _ = self.get_pose()
+        if math.hypot(dock_x - x, dock_z - z) > DIST_TOLERANCE:
+            if (not self.rotate_to(math.atan2(-(dock_x - x), -(dock_z - z)))
+                    or not self.drive_to(dock_x, dock_z)):
+                self._wait_for_path(State.GO_CHARGE)
+                return
+        if not self.rotate_to(math.pi):
+            self._wait_for_path(State.GO_CHARGE)
+            return
+        self.stop_wheels()
+        if not self._dock_contact():
+            # Correct odometry at the marked dock, then approach it again.
+            pos = self.robot.getSelf().getPosition()
+            if self.localizer and self.localizer.available:
+                self.localizer.snap(pos[0], pos[2])
+            self._wait_for_path(State.GO_CHARGE)
+            return
+        print(f"[BATERIA] {self.robot_id}: ladowanie od {self.battery.level:.1f}%.")
+        self.set_state(State.CHARGING)
+
+    def _state_charging(self):
+        self.stop_wheels()
+        if not self._dock_contact():
+            self.set_state(State.GO_CHARGE)
+            return
+        if self.battery.level < self.battery.target:
+            self.wait_seconds(0.25)
+            return
+        self.charge_cycles += 1
+        print(f"[BATERIA] {self.robot_id}: {self.battery.level:.1f}%, "
+              f"wznawiam {self.charge_resume_state} (cykl {self.charge_cycles}).")
+        self.current_goal_cell = None
+        self.wait_time = 0.0
+        self.avoid_attempts = 0
+        self.set_state(self.charge_resume_state)
+
+    def _state_battery_empty(self):
+        self.stop_wheels()
+        self.wait_seconds(1.0)
+
+    def _state_done(self):
+        # Park and recharge in the robot's own bay, outside shared aisles.
+        if not self._dock_contact() or self.battery.level < self.battery.target - 0.5:
+            self._request_charge(State.DONE)
+            return
+        self.stop_wheels()
+        print(f"[FSM] {self.robot_id}: koniec pracy, zaparkowany przy ladowarce.")
         self.finished = True
 
     # ------------------------------------------------------------------
@@ -1357,13 +1611,21 @@ class WarehouseController:
             State.RETURN_TO_TERMINAL: self._state_return_to_terminal,
             State.UNLOAD: self._state_unload,
             State.REPORT: self._state_report,
+            State.GO_CHARGE: self._state_go_charge,
+            State.CHARGING: self._state_charging,
+            State.BATTERY_EMPTY: self._state_battery_empty,
             State.DONE: self._state_done,
         }
         import traceback
-        while self.robot.step(self.timestep) != -1:
-            self._update_carried()
+        while True:
             try:
+                if not self.step():
+                    break
+                self._maybe_charge()
                 handlers[self.state]()
+            except BatteryEmpty:
+                print(f"[BATERIA] {self.robot_id}: 0% — awaryjne zatrzymanie.")
+                self.set_state(State.BATTERY_EMPTY)
             except Exception:
                 print("[FSM] WYJATEK w handlerze stanu "
                       f"{self.state}:\n" + traceback.format_exc())

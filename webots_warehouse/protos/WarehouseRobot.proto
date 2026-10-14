@@ -78,6 +78,10 @@ PROTO WarehouseRobot [
   field SFRotation rotation     0 1 0 0                  # 0 1 0 0 = przod na -Z (polnoc)
   field SFString   name         "WarehouseRobot"         # nazwa instancji robota
   field SFString   controller   "warehouse_controller"   # kontroler FSM kompletacji
+  field SFFloat batteryLevel 65
+  field SFColor batteryColor 0.2 0.9 0.3
+  field SFVec3f telescopeTranslation 0 0 0
+  field SFVec3f telescopeScale 1 1 1
   field SFString   customData   ""                       # zamiar ruchu dla drugiego robota
 ]
 {
@@ -91,6 +95,19 @@ PROTO WarehouseRobot [
     customData IS customData
     supervisor TRUE
     children [
+      # Battery status lamp; color is updated by the energy model.
+      Pose {
+        translation 0 0.38 -0.27
+        children [ Shape {
+          appearance PBRAppearance {
+            baseColor IS batteryColor
+            emissiveColor IS batteryColor
+            emissiveIntensity 0.7
+            roughness 0.4
+          }
+          geometry Box { size 0.22 0.025 0.07 }
+        } ]
+      }
       # ---- korpus glowny (wizualizacja) ----
       Transform {
         translation 0 0.20 0
@@ -273,7 +290,36 @@ PROTO WarehouseRobot [
           }
         }
       }
-      # ---- winda pionowa: SliderJoint + LinearMotor (zakres 0-1.6 m) ----
+      # ---- wysuw ramienia: SliderJoint + LinearMotor "reach_motor" ----
+      #       dodatnia pozycja (oś -Z) = wysuniecie do paczki (0.3 m)
+      SliderJoint {
+        jointParameters JointParameters {
+          axis 0 0 -1
+        }
+        device [
+          LinearMotor {
+            name "reach_motor"
+            minPosition -0.05
+            maxPosition 0.3
+            maxForce 60
+          }
+          PositionSensor {
+            name "reach_sensor"
+          }
+        ]
+        endPoint Solid {
+          translation 0 0.35 -0.15
+          name "reach_carriage"
+          children [
+            # korpus karetki (nosnik windy)
+            Shape {
+              appearance PBRAppearance {
+                baseColor 0.4 0.4 0.45
+                roughness 0.6
+              }
+              geometry Box { size 0.12 0.12 0.12 }
+            }
+
       SliderJoint {
         jointParameters JointParameters {
           axis 0 1 0
@@ -287,7 +333,7 @@ PROTO WarehouseRobot [
           }
         ]
         endPoint Solid {
-          translation 0 0.35 -0.15
+          translation 0 0 0
           name "lift_head"   # baza glowicy: gora korpusu, przod
           children [
             # obudowa glowicy
@@ -323,18 +369,27 @@ PROTO WarehouseRobot [
                 }
               ]
               endPoint Solid {
-                translation -0.20 -0.20 -0.27  # palce przed korpusem: z=-0.47..-0.37
+                translation -0.185 -0.10 -0.33  # palce przed korpusem: z=-0.47..-0.37
                 name "finger_left"
                 children [
-                  Shape {
-                    appearance PBRAppearance {
-                      baseColor 0.9 0.8 0.1
-                      roughness 0.5
-                    }
-                    geometry Box { size 0.02 0.10 0.10 }
+                  DEF TELESCOPE_LEFT Transform {
+                    translation IS telescopeTranslation
+                    scale IS telescopeScale
+                    children [
+                      Shape {
+                        appearance PBRAppearance {
+                          baseColor 0.9 0.8 0.1
+                          metalness 0.45
+                          roughness 0.4
+                        }
+                        geometry Box { size 0.02 0.10 0.30 }
+                      }
+                    ]
                   }
                 ]
-                boundingObject Box { size 0.02 0.10 0.10 }
+                # Contacts stay on the short carriage; telescopic rails are
+                # visual because parcel handling is kinematic.
+                boundingObject Box { size 0.02 0.06 0.06 }
                 physics Physics {
                   density -1
                   mass 0.25
@@ -355,18 +410,27 @@ PROTO WarehouseRobot [
                 }
               ]
               endPoint Solid {
-                translation 0.20 -0.20 -0.27  # palce przed korpusem: z=-0.47..-0.37
+                translation 0.185 -0.10 -0.33  # palce przed korpusem: z=-0.47..-0.37
                 name "finger_right"
                 children [
-                  Shape {
-                    appearance PBRAppearance {
-                      baseColor 0.9 0.8 0.1
-                      roughness 0.5
-                    }
-                    geometry Box { size 0.02 0.10 0.10 }
+                  DEF TELESCOPE_RIGHT Transform {
+                    translation IS telescopeTranslation
+                    scale IS telescopeScale
+                    children [
+                      Shape {
+                        appearance PBRAppearance {
+                          baseColor 0.9 0.8 0.1
+                          metalness 0.45
+                          roughness 0.4
+                        }
+                        geometry Box { size 0.02 0.10 0.30 }
+                      }
+                    ]
                   }
                 ]
-                boundingObject Box { size 0.02 0.10 0.10 }
+                # Contacts stay on the short carriage; telescopic rails are
+                # visual because parcel handling is kinematic.
+                boundingObject Box { size 0.02 0.06 0.06 }
                 physics Physics {
                   density -1
                   mass 0.25
@@ -387,6 +451,14 @@ PROTO WarehouseRobot [
           physics Physics {
             density -1
             mass 1.4
+          }
+        }
+      }
+          ]
+          boundingObject Box { size 0.12 0.12 0.12 }
+          physics Physics {
+            density -1
+            mass 0.5
           }
         }
       }

@@ -50,6 +50,7 @@
 # ============================================================================
 
 import json
+from charging_stations import charging_station_nodes
 import shutil
 from pathlib import Path
 
@@ -297,6 +298,7 @@ def build_world(layout, products):
             f"  boundingObject Box {{\n"
             f"    size {' '.join(str(v) for v in wsize)}\n  }}\n"
             f"  locked TRUE\n}}")
+    sections.append(charging_station_nodes(layout))
     sections.append(terminal_zone_node())
     sections.append(terminal_kiosk_node())
     for cell in layout["blocked_cells"]:

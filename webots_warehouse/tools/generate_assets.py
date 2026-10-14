@@ -202,6 +202,7 @@ def generate_layout() -> Path:
         "origin": {"x": ORIGIN_X, "z": ORIGIN_Z},
         "cell_to_world": "x = origin.x + c; z = origin.z + r",
         "terminal_cells": TERMINAL_CELLS,
+        "charging_cells": [[15, 11], [0, 11]],
         "terminal_world": TERMINAL_WORLD,
         "robot_start": ROBOT_START,
         "blocked_cells": blocked,

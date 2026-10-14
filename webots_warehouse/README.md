@@ -250,3 +250,7 @@ sterowanie symulacją, dowolne roboty).
 
 Mostkiem steruje się narzędziami MCP, np. `get_scene_tree`,
 `watch_simulation`, `get_object_catalog`, `validate_world`.
+
+## Baterie i ładowarki
+
+Dwie stacje ładowania, poziom baterii w HUD, automatyczny powrót do stacji i wznowienie zadania po osiągnięciu 95%. Zużycie energii jest przyspieszone demonstracyjnie. Parametry i opis: [docs/battery_charging.md](docs/battery_charging.md).
